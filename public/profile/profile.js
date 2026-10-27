@@ -110,7 +110,7 @@ function applyVars(cfg) {
     '--card-bg': theme ? `linear-gradient(160deg, ${rgba(theme[0], L.cardOpacity / 100)}, ${rgba(theme[1] || theme[0], L.cardOpacity / 100)})`
       : L.cardStyle === 'gradient' ? `linear-gradient(150deg, ${rgba(L.cardColor, L.cardOpacity / 100)}, ${rgba(L.cardColor2, L.cardOpacity / 100)})`
         : rgba(L.cardColor, L.cardOpacity / 100),
-    '--card-blur': L.cardBlur + 'px', '--border': rgba(L.borderColor, L.borderOpacity / 100), '--border-w': L.borderWidth + 'px',
+    '--card-solid': L.cardColor, '--card-blur': L.cardBlur + 'px', '--border': rgba(L.borderColor, L.borderOpacity / 100), '--border-w': L.borderWidth + 'px',
     '--card-glow': L.cardGlow + 'px', '--card-glow-color': rgba(L.cardStyle === 'neon' ? L.borderColor : L.accent, 0.55),
     '--text-glow': L.textGlow ? `0 0 ${L.textGlow}px ${rgba(L.accent, 0.8)}` : 'none',
     '--name-size': cfg.name.size + 'px', '--name-weight': cfg.name.weight, '--name-color': cfg.name.color,
@@ -127,8 +127,9 @@ function applyVars(cfg) {
     `layout-${L.layout}`, `align-${L.align}`, `card-${L.cardStyle}`,
     L.shadow ? 'has-shadow' : '', calm() ? 'calm' : '',
     cfg.page.noSelect ? 'no-select' : '', state.preview ? 'is-preview' : '', state.entered ? 'entered' : 'waiting',
-    `cursor-${cfg.cursor.type}`,
+    `cursor-${cfg.cursor.type}`, state.settled ? 'settled' : '',
     cfg.fx.vhs && !calm() ? 'vhs-on' : '', cfg.audio.visualizer === 'glow' ? 'viz-glow' : '',
+    cfg.audio.tracks?.length && ['mini', 'full'].includes(cfg.audio.player) ? `dock-${cfg.audio.player}` : '',
   ].filter(Boolean).join(' ');
 
   let cursorStyle = document.getElementById('cursor-style');
@@ -217,16 +218,18 @@ const TINTS = {
 function buildFilters(cfg) {
   const fx = cfg.fx;
   const el = h('div', { class: 'filters' });
+  // The color filter lives in its own layer: blend modes inside .filters would stop its backdrop-filter.
+  let tint = null;
   if (fx.tint !== 'none' && TINTS[fx.tint]) {
-    const t = h('div', { class: `tint tint-${fx.tint}` });
-    t.style.backdropFilter = t.style.webkitBackdropFilter = TINTS[fx.tint];
-    el.append(t);
+    tint = h('div', { class: `tint tint-${fx.tint}` });
+    tint.style.backdropFilter = TINTS[fx.tint];
+    tint.style.webkitBackdropFilter = TINTS[fx.tint];
   }
   if (fx.vignette > 0) el.append(h('div', { class: 'vignette', style: { opacity: fx.vignette / 100 } }));
   if (fx.scanlines) el.append(h('div', { class: 'scanlines' + (calm() ? '' : ' flicker') }));
   if (fx.grain) el.append(h('div', { class: 'grain' + (calm() ? '' : ' moving'), style: { backgroundImage: cssUrl(grainTexture()) } }));
   if (fx.vhs && !calm()) el.append(h('div', { class: 'vhs' }, h('div', { class: 'vhs-band' })));
-  return { el };
+  return { el: h('div', { class: 'slot' }, tint, el) };
 }
 
 // ---------- name ----------
@@ -684,7 +687,7 @@ function buildPlayerUi(cfg, mode) {
 
   const volume = A.showVolume ? h('div', { class: 'pl-volume' }, volIcon, vol) : null;
   if (mode === 'mini') {
-    el.append(playBtn, h('div', { class: 'pl-meta' }, h('div', { class: 'marquee' }, title)), player.tracks.length > 1 ? next : null, volume);
+    el.append(...[playBtn, h('div', { class: 'pl-meta' }, h('div', { class: 'marquee' }, title)), player.tracks.length > 1 ? next : null, volume].filter(Boolean));
   } else {
     el.append(
       h('div', { class: 'pl-top' }, cover, h('div', { class: 'pl-meta' }, title, artist)),
@@ -990,6 +993,7 @@ function enter() {
   onEnter = [];
   hooks.forEach((fn) => fn());
   countUpViews();
+  if (!state.settleTimer) state.settleTimer = setTimeout(() => { state.settled = true; document.body.classList.add('settled'); }, 2600);
 }
 
 // ---------- views ----------
@@ -1099,6 +1103,10 @@ function render() {
   if (state.entered) { onEnter.splice(0).forEach((fn) => fn()); if (!state.countedUp) countUpViews(); }
   animateTitle(cfg);
   document.body.classList.remove('booting');
+  // Once the entrance has played, later re-renders (live preview, late Discord data) shouldn't replay it.
+  if (state.entered && !state.settleTimer) {
+    state.settleTimer = setTimeout(() => { state.settled = true; document.body.classList.add('settled'); }, 2600);
+  }
 }
 
 // Page-level protections.
@@ -1124,6 +1132,10 @@ if (state.preview) {
       });
     } else if (e.data.type === 'traplarp:replay') {
       state.entered = false;
+      state.settled = false;
+      clearTimeout(state.settleTimer);
+      state.settleTimer = null;
+      state.countedUp = false;
       slots.splash.replaceChildren();
       render();
     }
