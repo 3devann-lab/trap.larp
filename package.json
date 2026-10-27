@@ -1,0 +1,23 @@
+{
+  "name": "trap.larp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Private, self-hosted bio link page with a full customization dashboard.",
+  "type": "module",
+  "main": "server/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "@discord-user-card/profile-effects": "0.0.9",
+    "compression": "1.8.2",
+    "express": "5.3.0",
+    "lucide-static": "1.54.0",
+    "multer": "2.4.0",
+    "simple-icons": "16.34.0"
+  }
+}
