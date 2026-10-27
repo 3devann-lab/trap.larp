@@ -264,9 +264,10 @@ function discordCheck(ctx) {
       const r = await api('GET', `/discord/check?id=${encodeURIComponent(id || '')}`);
       const p = r.profile;
       const line = (ok, text) => h('div', { class: 'check-line ' + (ok ? 'ok' : 'bad') }, icon(ok ? 'lu:circle-check' : 'lu:circle-alert'), h('span', {}, text));
-      out.replaceChildren(
+      out.replaceChildren(...[
         line(r.lanyard.ok, r.lanyard.ok ? `Live status connected (${r.lanyard.username} is ${r.lanyard.status})` : `Live status unavailable: ${r.lanyard.error}. Join discord.gg/lanyard with this account.`),
-        line(Boolean(p), p ? `Profile found: ${p.globalName || p.username}${p.bio ? ', has bio' : ''}, ${p.badges.length} badge(s)${p.effect ? `, effect: ${p.effect.title || p.effect.id}` : ''}${p.decoration ? ', has decoration' : ''}` : 'Couldn\'t load profile details (bio, banner, badges). Live status still works.'));
+        line(Boolean(p), p ? `Profile found: ${p.globalName || p.username}${p.bio ? ', has bio' : ''}, ${p.badges.length} badge(s)${p.effect ? `, effect: ${p.effect.title || p.effect.id}` : ''}${p.decoration ? ', has decoration' : ''}` : 'Couldn\'t load profile details (bio, banner, badges). Live status still works.'),
+        p?.effect?.unknown ? line(false, 'Your profile effect is newer than the built-in catalog. Set "Profile effect" to "Custom image URL" and paste its loop.png link instead.') : null].filter(Boolean));
     } catch (err) {
       out.replaceChildren(h('p', { class: 'err' }, err.message));
     }

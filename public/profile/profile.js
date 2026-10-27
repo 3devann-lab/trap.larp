@@ -399,7 +399,8 @@ function buildBio(cfg) {
   const mode = calm() && P.bioMode !== 'static' ? 'static' : P.bioMode;
   if (mode === 'typewriter') {
     const text = h('span', { class: 'tw-text' });
-    el.append(text, P.typeCursor ? h('span', { class: 'tw-cursor' }, '|') : null);
+    el.append(text);
+    if (P.typeCursor) el.append(h('span', { class: 'tw-cursor' }, '|'));
     const plain = lines.map(stripMd);
     later(() => {
       let li = 0; let ci = 0; let deleting = false; let wait = 0;

@@ -10,7 +10,7 @@ import { PORT, DATA_DIR, UPLOAD_DIR, DASHBOARD_PATH, DASHBOARD_PASSWORD, MAX_UPL
 import { getConfig, setConfig, getStats, resetStats, listSnapshots, readSnapshot } from './store.js';
 import { isAuthed, login, clearSession, requireAuth } from './auth.js';
 import { recordView, recordClick, viewCount, statsSummary } from './analytics.js';
-import { getProfile, getInvite, getAppIcon, effectCatalog, findEffect, checkLanyard, isSnowflake } from './discord.js';
+import { getProfile, getInvite, inviteCode, getAppIcon, effectCatalog, findEffect, checkLanyard, isSnowflake } from './discord.js';
 import { normalizeGuns, localizeMedia, downloadToLibrary, ALLOWED_EXT } from './importer.js';
 import { iconSet, allIconRefs } from './icons.js';
 import { renderProfile, renderLogin, renderDashboard } from './render.js';
@@ -47,6 +47,8 @@ app.use('/uploads', express.static(UPLOAD_DIR, {
     res.set('Access-Control-Allow-Origin', '*');
   },
 }));
+
+for (const prefix of ['/static', '/shared', '/uploads']) app.use(prefix, (req, res) => res.status(404).end());
 
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 app.get('/robots.txt', (req, res) => {
@@ -108,7 +110,7 @@ app.get('/api/discord/profile/:id', wrap(async (req, res) => {
 
 app.get('/api/discord/invite/:code', wrap(async (req, res) => {
   const code = req.params.code;
-  const allowed = getConfig().widgets.items.some((w) => w.type === 'discord_server' && String(w.invite || '').includes(code));
+  const allowed = getConfig().widgets.items.some((w) => w.type === 'discord_server' && inviteCode(w.invite) === code);
   if (!allowed && !isAuthed(req)) return res.status(404).json(null);
   res.set('Cache-Control', 'public, max-age=300').json(await getInvite(code));
 }));
@@ -303,8 +305,9 @@ app.use('/api', (req, res) => res.status(404).json({ error: 'Not found.' }));
 app.use((req, res) => res.redirect(302, '/'));
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error('[server]', err);
-  if (!res.headersSent) res.status(500).json({ error: 'Server error.' });
+  const status = err.status || err.statusCode || 500;
+  if (status >= 500) console.error('[server]', err);
+  if (!res.headersSent) res.status(status).json({ error: status >= 500 ? 'Server error.' : err.message });
 });
 
 app.listen(PORT, () => {

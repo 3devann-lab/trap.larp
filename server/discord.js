@@ -88,8 +88,10 @@ export function getProfile(userId) {
 }
 
 // ---------- Server invites ----------
+export const inviteCode = (value) => String(value || '').trim().replace(/^https?:\/\/(www\.)?(discord\.gg|discord(app)?\.com\/invite)\//i, '').replace(/[/?#].*$/, '');
+
 export function getInvite(code) {
-  const clean = String(code || '').trim().replace(/^https?:\/\/(www\.)?(discord\.gg|discord(app)?\.com\/invite)\//i, '').replace(/[/?#].*$/, '');
+  const clean = inviteCode(code);
   if (!/^[\w-]{2,40}$/.test(clean)) return Promise.resolve(null);
   return cached(`invite:${clean}`, 10 * 60_000, async () => {
     const d = await getJson(`https://discord.com/api/v10/invites/${encodeURIComponent(clean)}?with_counts=true`);
