@@ -25,7 +25,7 @@ A private, self-hosted bio-link page in the style of guns.lol, with a full custo
 
 **Widgets**: Discord server invite card, Spotify/YouTube/SoundCloud embeds, GitHub stats, countdown, local clock, text, image, custom HTML.
 
-**Analytics**: view counter (unique or total, compact format, count-up animation, carry over your old count), 30-day chart, referrers, link clicks, devices, browsers, recent visits.
+**Analytics**: view counter (unique or total, counted per IP address so reloading or clearing cookies can't pad it, compact format, count-up animation, carry over your old count), 30-day chart, referrers, link clicks, devices, browsers, recent visits.
 
 **Dashboard**: live preview (desktop/mobile), autosave, settings search, media library with drag-and-drop uploads, backups, daily snapshots with one-click restore, custom CSS/HTML/JS, link embed (Open Graph) settings, animated tab titles, and the guns.lol transfer.
 

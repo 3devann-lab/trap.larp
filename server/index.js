@@ -81,7 +81,7 @@ app.get('/oembed.json', (req, res) => {
 app.post('/api/view', (req, res) => {
   const cfg = getConfig();
   if (!(isAuthed(req) && !cfg.views.countOwner)) {
-    recordView(req, { referrer: String(req.body?.referrer || '').slice(0, 500) });
+    recordView(req, { referrer: String(req.body?.referrer || '').slice(0, 500), cooldownMinutes: cfg.views.cooldown });
   }
   res.json({ views: viewCount(getConfig()) });
 });

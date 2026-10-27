@@ -448,7 +448,8 @@ export const SECTIONS = [
         title: 'Views', fields: [
           { key: 'views.show', type: 'toggle', label: 'Show view counter', default: true },
           { key: 'views.position', type: 'select', label: 'Position', default: 'card', options: opts(['card', 'In the card'], ['top-left', 'Top-left corner'], ['top-right', 'Top-right corner'], ['bottom-left', 'Bottom-left corner'], ['bottom-right', 'Bottom-right corner']), show: (c) => c.views.show },
-          { key: 'views.mode', type: 'select', label: 'Count', default: 'unique', options: opts(['unique', 'Unique visitors'], ['total', 'Every page load']) },
+          { key: 'views.mode', type: 'select', label: 'Count', default: 'unique', options: opts(['unique', 'Unique visitors'], ['total', 'Every visit']) },
+          { key: 'views.cooldown', type: 'select', label: 'Count the same IP again after', default: '30', options: opts(['15', '15 minutes'], ['30', '30 minutes'], ['60', '1 hour'], ['360', '6 hours'], ['1440', '24 hours']), help: 'Each IP address counts once per this window, so reloading, clearing cookies or switching browsers won\'t add views.', show: (c) => c.views.mode === 'total' },
           { key: 'views.format', type: 'select', label: 'Format', default: 'full', options: opts(['full', '12,345'], ['compact', '12.3K']), show: (c) => c.views.show },
           { key: 'views.label', type: 'text', label: 'Label', default: '', placeholder: 'views', show: (c) => c.views.show },
           { key: 'views.animate', type: 'toggle', label: 'Count-up animation', default: true, show: (c) => c.views.show },

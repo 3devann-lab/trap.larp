@@ -102,7 +102,7 @@ export async function overview(ctx) {
           h('button', { type: 'button', class: 'btn small', onclick: async () => { await copyText(url); toast('Link copied'); } }, icon('lu:copy'), 'Copy link'),
           h('a', { class: 'btn small ghost', href: url, target: '_blank' }, icon('lu:external-link'), 'Open'))),
       h('div', { class: 'tiles' },
-        tile('Views shown on page', fmtNum(s.displayed), ctx.cfg.views.offset ? `includes ${fmtNum(ctx.cfg.views.offset)} carried over` : ctx.cfg.views.mode === 'unique' ? 'unique visitors' : 'every page load'),
+        tile('Views shown on page', fmtNum(s.displayed), ctx.cfg.views.offset ? `includes ${fmtNum(ctx.cfg.views.offset)} carried over` : ctx.cfg.views.mode === 'unique' ? 'unique visitors' : 'every visit'),
         tile('Unique visitors', fmtNum(s.unique), 'all time'),
         tile('Page loads', fmtNum(s.total), 'all time'),
         tile('Today', fmtNum(s.today.views), `${fmtNum(s.today.unique)} unique`),

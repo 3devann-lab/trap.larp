@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import net from 'node:net';
 import { getStats, updateStats } from './store.js';
 
 const BOT_RE = /bot|crawl|spider|slurp|preview|embed|facebookexternalhit|whatsapp|curl|wget|python|node-fetch|axios|headless|lighthouse|monitor/i;
@@ -33,21 +34,61 @@ function refHost(ref, selfHost) {
   }
 }
 
-export function recordView(req, { referrer }) {
+// One visitor = one network address. IPv6 hosts are normally handed a whole /64 and can hop
+// between addresses inside it at will, so the /64 counts as one visitor.
+function ipKey(ip) {
+  ip = String(ip || '').replace(/%.*$/, '');
+  const v4 = /^(?:::ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
+  if (v4) return v4[1];
+  if (!net.isIPv6(ip)) return ip;
+  const groups = (s) => (s ? s.split(':') : []).flatMap((g) => (g.includes('.') ? ['0', '0'] : [g]));
+  const [head, tail] = ip.split('::');
+  const h = groups(head);
+  const t = groups(tail);
+  const full = tail === undefined ? h : [...h, ...Array(8 - h.length - t.length).fill('0'), ...t];
+  return full.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(':') + '::/64';
+}
+
+// When each visitor was last counted, so reloading or clearing cookies can't inflate the numbers.
+// Kept in insertion order (oldest first), which lets expired entries be dropped from the front.
+const lastCounted = new Map();
+
+function inCooldown(visitor, windowMs) {
+  const now = Date.now();
+  for (const [k, t] of lastCounted) {
+    if (now - t < windowMs) break;
+    lastCounted.delete(k);
+  }
+  if (lastCounted.has(visitor)) return true;
+  lastCounted.set(visitor, now);
+  return false;
+}
+
+export function recordView(req, { referrer, cooldownMinutes }) {
   const ua = String(req.get('user-agent') || '');
   if (!ua || BOT_RE.test(ua)) return { counted: false };
-  const ip = req.ip || '';
+  const ip = ipKey(req.ip);
+  if (!ip) return { counted: false };
+  // Visitors are stored only as salted hashes; the salt lives with the stats file.
+  const s = getStats();
+  s.salt ||= crypto.randomBytes(16).toString('hex');
+  const hash = (v) => crypto.createHash('sha256').update(`${s.salt}|${v}`).digest('base64url').slice(0, 16);
+  const visitor = hash(ip);
+  if (inCooldown(visitor, Math.max(1, Number(cooldownMinutes) || 30) * 6e4)) return { counted: false };
   const today = day();
   const country = String(req.get('cf-ipcountry') || req.get('x-vercel-ip-country') || '').toUpperCase().slice(0, 2);
   let isNew = false;
   updateStats((s) => {
-    // Visitors are stored only as salted hashes; the salt lives with the stats file.
-    s.salt ||= crypto.randomBytes(16).toString('hex');
-    const visitor = crypto.createHash('sha256').update(`${s.salt}|${ip}|${ua}`).digest('base64url').slice(0, 16);
+    let last = s.visitors[visitor];
+    // Visitors used to be keyed by IP + user agent; carry those over instead of counting them again.
+    const legacy = hash(`${req.ip || ''}|${ua}`);
+    if (!last && s.visitors[legacy]) {
+      last = s.visitors[legacy];
+      delete s.visitors[legacy];
+    }
     s.total += 1;
     s.daily[today] ||= { v: 0, u: 0 };
     s.daily[today].v += 1;
-    const last = s.visitors[visitor];
     if (!last) {
       isNew = true;
       s.unique += 1;
