@@ -1,5 +1,24 @@
 // Music playlist with an optional Web Audio analyser for visualizers and beat pulsing.
-import { sameOrigin } from './util.js';
+// YouTube links play through a hidden YouTube embed instead of an <audio> element.
+import { sameOrigin, youtubeId } from './util.js';
+
+const YT_ENDED = 0;
+const YT_PLAYING = 1;
+const YT_BUFFERING = 3;
+
+let ytApi = null;
+function loadYouTubeApi() {
+  ytApi ||= new Promise((resolve, reject) => {
+    if (window.YT?.Player) return resolve(window.YT);
+    const prev = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => { prev?.(); resolve(window.YT); };
+    const s = document.createElement('script');
+    s.src = 'https://www.youtube.com/iframe_api';
+    s.onerror = () => { ytApi = null; reject(new Error('YouTube unavailable')); };
+    document.head.append(s);
+  });
+  return ytApi;
+}
 
 export class Player {
   constructor() {
@@ -11,6 +30,7 @@ export class Player {
     this.started = false;
     this.volume = 0.4;
     this.muted = false;
+    this.level = 0.4;
     // Two elements: same-site files go through the analyser; remote files can't (they'd go silent
     // without CORS headers), so they play on a plain element.
     this.elA = new Audio();
@@ -23,8 +43,14 @@ export class Player {
       el.addEventListener('play', () => this.emit());
       el.addEventListener('pause', () => this.emit());
       el.addEventListener('loadedmetadata', () => this.emit());
-      el.addEventListener('error', () => { if (this.started && this.tracks.length > 1) setTimeout(() => this.next(), 400); });
+      el.addEventListener('error', () => this.onError());
     }
+    this.yt = null;
+    this.ytReady = null;
+    this.ytId = null;
+    this.ytCued = false;
+    this.ytState = -1;
+    this.ytTimer = null;
     this.ctx = null;
     this.analyser = null;
     this.freq = null;
@@ -34,7 +60,25 @@ export class Player {
 
   get el() { return this.current && sameOrigin(this.current.url) ? this.elA : this.elB; }
   get current() { return this.tracks[this.order[this.pos]] || null; }
-  get playing() { return !this.el.paused && !this.el.ended; }
+  get currentYt() { return this.current ? youtubeId(this.current.url) : null; }
+  get playing() {
+    if (this.currentYt) return this.ytState === YT_PLAYING || this.ytState === YT_BUFFERING;
+    return !this.el.paused && !this.el.ended;
+  }
+  get currentTime() { return this.currentYt ? this.yt?.getCurrentTime() || 0 : this.el.currentTime; }
+  get duration() { return this.currentYt ? this.yt?.getDuration() || NaN : this.el.duration; }
+
+  // Title, artist and cover for the current track; YouTube fills in whatever was left blank.
+  get meta() {
+    const t = this.current || {};
+    const id = this.currentYt;
+    const video = id && id === this.ytId ? this.yt?.getVideoData?.() : null;
+    return {
+      title: t.title || video?.title || '',
+      artist: t.artist || video?.author || '',
+      cover: t.cover || (id ? `https://i.ytimg.com/vi/${id}/mqdefault.jpg` : ''),
+    };
+  }
 
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   emit() { for (const fn of this.listeners) fn(this); }
@@ -44,7 +88,9 @@ export class Player {
     const sig = JSON.stringify(list.map((t) => t.url));
     this.opts = opts;
     if (!this.started) this.volume = (opts.volume ?? 40) / 100;
-    for (const el of [this.elA, this.elB]) el.volume = this.muted ? 0 : this.volume;
+    this.setLevel(this.muted ? 0 : this.volume);
+    // Get the YouTube player ready before the visitor clicks enter, so playback starts right away.
+    if (list.some((t) => youtubeId(t.url))) this.ensureYouTube();
     if (sig === this.sig) {
       this.tracks = list; // titles/covers may have changed
       this.emit();
@@ -69,10 +115,49 @@ export class Player {
     if (!silent) this.emit();
   }
 
+  // The embed sits off-screen; browsers keep playing audio from it.
+  ensureYouTube() {
+    this.ytReady ||= loadYouTubeApi().then((YT) => new Promise((resolve) => {
+      const host = document.createElement('div');
+      host.setAttribute('aria-hidden', 'true');
+      host.style.cssText = 'position:fixed;left:-400px;bottom:0;width:200px;height:200px;opacity:0;pointer-events:none';
+      const mount = document.createElement('div');
+      host.append(mount);
+      document.body.append(host);
+      const yt = new YT.Player(mount, {
+        width: 200,
+        height: 200,
+        host: 'https://www.youtube-nocookie.com',
+        playerVars: { autoplay: 0, controls: 0, disablekb: 1, fs: 0, iv_load_policy: 3, playsinline: 1, rel: 0, origin: location.origin },
+        events: {
+          onReady: () => {
+            this.yt = yt;
+            yt.setVolume(Math.round(this.level * 100));
+            resolve(yt);
+          },
+          onStateChange: (e) => this.onYtState(e.data),
+          onError: () => { if (this.currentYt) this.onError(); },
+        },
+      });
+    })).catch(() => null);
+    return this.ytReady;
+  }
+
   load() {
     for (const el of [this.elA, this.elB]) { el.pause(); }
+    if (this.ytId) this.yt?.pauseVideo();
     const t = this.current;
     if (!t) return;
+    const id = youtubeId(t.url);
+    if (id) {
+      this.ensureYouTube().then((yt) => {
+        if (!yt || this.currentYt !== id || this.ytId === id) return;
+        this.ytId = id;
+        this.ytCued = true;
+        yt.cueVideoById(id);
+      });
+      return;
+    }
     const el = this.el;
     el.src = t.url;
     el.loop = this.opts.repeat === 'one';
@@ -107,32 +192,52 @@ export class Player {
     if (!this.current) return;
     this.ensureGraph();
     this.ctx?.resume?.();
-    const el = this.el;
-    if (!el.src) this.load();
-    if (fade && !this.muted) {
-      el.volume = 0;
-      this.fadeTo(this.volume, 1600);
+    const fadeIn = fade && !this.muted;
+    this.setLevel(fadeIn ? 0 : this.muted ? 0 : this.volume);
+    const id = this.currentYt;
+    if (id) {
+      const yt = await this.ensureYouTube();
+      if (!yt || this.currentYt !== id) return;
+      // YouTube buffers before it makes a sound, so the fade waits until it's actually playing.
+      this.fadeOnPlay = fadeIn;
+      yt.unMute();
+      // A cued video ignores playVideo() sent right after cueing, so it's loaded instead.
+      if (this.ytId === id && !this.ytCued) yt.playVideo();
+      else { this.ytId = id; this.ytCued = false; yt.loadVideoById(id); }
     } else {
-      el.volume = this.muted ? 0 : this.volume;
+      const el = this.el;
+      if (!el.src) this.load();
+      if (fadeIn) this.fadeTo(this.volume, 1600);
+      try { await el.play(); } catch { /* blocked until next click */ }
     }
-    try { await el.play(); } catch { /* blocked until next click */ }
     this.emit();
   }
 
+  // Output level of every backend (0–1); `volume` is the level the visitor chose.
+  setLevel(v) {
+    this.level = v;
+    for (const el of [this.elA, this.elB]) el.volume = v;
+    this.yt?.setVolume(Math.round(v * 100));
+  }
+
   fadeTo(target, ms) {
-    const el = this.el;
-    const from = el.volume;
+    const from = this.level;
     const t0 = performance.now();
     cancelAnimationFrame(this.fadeRaf);
     const step = (now) => {
       const k = Math.min(1, (now - t0) / ms);
-      el.volume = Math.max(0, Math.min(1, from + (target - from) * k));
+      this.setLevel(Math.max(0, Math.min(1, from + (target - from) * k)));
       if (k < 1) this.fadeRaf = requestAnimationFrame(step);
     };
     this.fadeRaf = requestAnimationFrame(step);
   }
 
-  pause() { this.el.pause(); this.emit(); }
+  pause() {
+    if (this.currentYt) this.yt?.pauseVideo();
+    else this.el.pause();
+    this.emit();
+  }
+
   toggle() { if (this.playing) this.pause(); else this.play(); }
 
   next() {
@@ -145,7 +250,7 @@ export class Player {
 
   prev() {
     if (!this.tracks.length) return;
-    if (this.el.currentTime > 3) { this.el.currentTime = 0; return; }
+    if (this.currentTime > 3) { this.seekTo(0); return; }
     this.pos = (this.pos - 1 + this.order.length) % this.order.length;
     this.load();
     this.play();
@@ -157,27 +262,51 @@ export class Player {
     this.next();
   }
 
+  onError() {
+    if (this.started && this.tracks.length > 1) setTimeout(() => this.next(), 400);
+  }
+
+  onYtState(state) {
+    this.ytState = state;
+    // The embed has no timeupdate event, so poll for the progress bar while it plays.
+    clearInterval(this.ytTimer);
+    if (state === YT_PLAYING) this.ytTimer = setInterval(() => this.emit(), 250);
+    if (state === YT_PLAYING && this.fadeOnPlay) {
+      this.fadeOnPlay = false;
+      this.fadeTo(this.volume, 1600);
+    }
+    if (state === YT_ENDED && this.currentYt) {
+      if (this.opts.repeat === 'one') { this.yt.seekTo(0, true); this.yt.playVideo(); } else this.onEnded();
+    }
+    this.emit();
+  }
+
+  seekTo(seconds) {
+    if (this.currentYt) this.yt?.seekTo(seconds, true);
+    else this.el.currentTime = seconds;
+  }
+
   seek(fraction) {
-    const el = this.el;
-    if (Number.isFinite(el.duration)) el.currentTime = fraction * el.duration;
+    if (Number.isFinite(this.duration)) this.seekTo(fraction * this.duration);
   }
 
   setVolume(v) {
     this.volume = Math.max(0, Math.min(1, v));
     this.muted = this.volume === 0;
     cancelAnimationFrame(this.fadeRaf);
-    for (const el of [this.elA, this.elB]) el.volume = this.volume;
+    this.setLevel(this.volume);
     this.emit();
   }
 
   toggleMute() {
     this.muted = !this.muted;
     if (!this.muted && this.volume === 0) this.volume = 0.4;
-    for (const el of [this.elA, this.elB]) el.volume = this.muted ? 0 : this.volume;
+    this.setLevel(this.muted ? 0 : this.volume);
     this.emit();
   }
 
-  // Sample the analyser once per frame. Returns null when there's nothing to analyse.
+  // Sample the analyser once per frame. Returns null when there's nothing to analyse
+  // (YouTube audio can't be read by the page).
   sample() {
     if (!this.analyser || this.el !== this.elA || this.elA.paused) {
       this.beat *= 0.9;

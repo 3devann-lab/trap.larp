@@ -279,9 +279,9 @@ export const SECTIONS = [
       {
         title: 'Tracks', fields: [
           {
-            key: 'audio.tracks', type: 'list', label: 'Playlist', default: [], addLabel: 'Add track', itemTitle: (t) => t.title || t.url?.split('/').pop() || 'Untitled track',
+            key: 'audio.tracks', type: 'list', label: 'Playlist', default: [], addLabel: 'Add track', itemTitle: (t) => t.title || (/youtu\.?be/i.test(t.url || '') ? 'YouTube track' : t.url?.split('/').pop()) || 'Untitled track',
             item: [
-              { key: 'url', type: 'media', accept: 'audio', label: 'Audio file', default: '' },
+              { key: 'url', type: 'media', accept: 'audio', label: 'Audio file or YouTube link', default: '', placeholder: 'Upload an MP3 or paste a YouTube link', help: 'YouTube links play through YouTube\'s own player: title and cover fill in by themselves, but they can\'t drive the visualizer.' },
               { key: 'title', type: 'text', label: 'Title', default: '' },
               { key: 'artist', type: 'text', label: 'Artist', default: '' },
               { key: 'cover', type: 'media', accept: 'image', label: 'Cover art', default: '' },
@@ -303,7 +303,7 @@ export const SECTIONS = [
           { key: 'audio.player', type: 'select', label: 'Player style', default: 'mini', options: opts(['hidden', 'Hidden'], ['mini', 'Mini (corner)'], ['full', 'Full (corner)'], ['card', 'Inside the card']) },
           { key: 'audio.position', type: 'select', label: 'Corner', default: 'bottom-left', options: opts('top-left', 'top-right', 'bottom-left', 'bottom-right'), show: (c) => ['mini', 'full'].includes(c.audio.player) },
           { key: 'audio.showVolume', type: 'toggle', label: 'Volume slider', default: true },
-          { key: 'audio.visualizer', type: 'select', label: 'Visualizer', default: 'none', options: opts(['none', 'None'], ['bars', 'Bars (bottom of screen)'], ['wave', 'Waveform'], ['ring', 'Ring around avatar'], ['glow', 'Card glow pulse']), help: 'Visualizers work for uploaded audio (same-site files).' },
+          { key: 'audio.visualizer', type: 'select', label: 'Visualizer', default: 'none', options: opts(['none', 'None'], ['bars', 'Bars (bottom of screen)'], ['wave', 'Waveform'], ['ring', 'Ring around avatar'], ['glow', 'Card glow pulse']), help: 'Visualizers work for uploaded audio (same-site files), not YouTube links.' },
           { key: 'audio.visualizerColor', type: 'color', label: 'Visualizer color', default: '#a855f7', show: (c) => c.audio.visualizer !== 'none' },
         ],
       },

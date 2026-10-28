@@ -1,4 +1,4 @@
-import { h, icon, md, stripMd, fmtNum, rgba, intToHex, cssUrl, isVideo, reducedMotion, isTouch, toast, copyText, safeUrl } from './util.js';
+import { h, icon, md, stripMd, fmtNum, rgba, intToHex, cssUrl, isVideo, reducedMotion, isTouch, toast, copyText, safeUrl, youtubeId } from './util.js';
 import { Particles, CursorFx, grainTexture } from './effects.js';
 import { Player } from './player.js';
 import { LanyardLive, presenceWidget, avatarUrl as discordAvatar, bannerUrl, decorationUrl, badgeIconUrl, clanBadgeUrl, STATUS_COLORS, connectionLinks } from './discord.js';
@@ -533,11 +533,6 @@ function spotifyEmbed(url) {
   return m ? { src: `https://open.spotify.com/embed/${m[1]}/${m[2]}?utm_source=generator&theme=0`, height: m[1] === 'track' || m[1] === 'episode' ? 152 : 352 } : null;
 }
 
-function youtubeId(url) {
-  const m = String(url).match(/(?:youtu\.be\/|v=|\/embed\/|\/shorts\/|\/live\/)([\w-]{11})/);
-  return m ? m[1] : /^[\w-]{11}$/.test(url) ? url : null;
-}
-
 function widget(cfg, w) {
   const tile = h('div', { class: `widget w-${w.type}` });
   if (w.title) tile.append(h('div', { class: 'w-title' }, w.title));
@@ -667,7 +662,7 @@ function buildPlayerUi(cfg, mode) {
 
   let lastCover = null;
   const sync = () => {
-    const t = player.current || {};
+    const t = player.meta;
     title.textContent = t.title || 'untitled';
     artist.textContent = t.artist || '';
     if (t.cover !== lastCover) {
@@ -676,10 +671,9 @@ function buildPlayerUi(cfg, mode) {
     }
     playBtn.replaceChildren(icon(player.playing ? 'lu:pause' : 'lu:play'));
     el.classList.toggle('is-playing', player.playing);
-    const e = player.el;
-    fill.style.width = e.duration ? (e.currentTime / e.duration) * 100 + '%' : '0%';
-    cur.textContent = fmt(e.currentTime);
-    dur.textContent = fmt(e.duration);
+    fill.style.width = player.duration ? (player.currentTime / player.duration) * 100 + '%' : '0%';
+    cur.textContent = fmt(player.currentTime);
+    dur.textContent = fmt(player.duration);
     volIcon.replaceChildren(icon(player.muted || player.volume === 0 ? 'lu:volume-x' : player.volume < 0.5 ? 'lu:volume-1' : 'lu:volume-2'));
     if (document.activeElement !== vol) vol.value = Math.round((player.muted ? 0 : player.volume) * 100);
   };
