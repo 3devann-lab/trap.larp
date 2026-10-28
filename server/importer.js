@@ -1,11 +1,11 @@
 // Turns data collected from a guns.lol profile (by the transfer bookmarklet) into trap.larp settings,
 // and downloads remote media into the local media library.
-import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import net from 'node:net';
-import { UPLOAD_DIR, MAX_UPLOAD_MB } from './env.js';
+import { MAX_UPLOAD_MB } from './env.js';
+import { store } from './store/index.js';
+import { EXT_BY_TYPE, PART_SIZE, newName } from './media.js';
 import { platformFromName, platformFromUrl } from '../shared/platforms.js';
 import { GUNS_BADGE_MAP, badgePreset } from '../shared/badges.js';
 import { getPath, setPath } from '../shared/schema.js';
@@ -316,15 +316,6 @@ export function normalizeGuns(payload) {
 export const MEDIA_KEYS = ['profile.avatar', 'profile.banner', 'bg.image', 'bg.video', 'cursor.image', 'page.favicon'];
 
 // ---------- media downloader ----------
-const EXT_BY_TYPE = {
-  'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp', 'image/avif': '.avif', 'image/svg+xml': '.svg',
-  'image/apng': '.png', 'image/x-icon': '.ico', 'image/vnd.microsoft.icon': '.ico', 'video/mp4': '.mp4', 'video/webm': '.webm',
-  'video/quicktime': '.mov', 'audio/mpeg': '.mp3', 'audio/mp3': '.mp3', 'audio/ogg': '.ogg', 'audio/wav': '.wav', 'audio/x-wav': '.wav',
-  'audio/mp4': '.m4a', 'audio/aac': '.aac', 'audio/flac': '.flac', 'audio/webm': '.weba', 'font/woff2': '.woff2', 'font/woff': '.woff',
-  'font/ttf': '.ttf', 'font/otf': '.otf',
-};
-export const ALLOWED_EXT = new Set([...Object.values(EXT_BY_TYPE), '.jpeg', '.cur', '.ani', '.ogv', '.m4v', '.opus']);
-
 function privateIp(ip) {
   if (net.isIPv4(ip)) {
     const [a, b] = ip.split('.').map(Number);
@@ -353,33 +344,51 @@ async function publicFetch(url) {
   throw new Error('Too many redirects');
 }
 
-export async function downloadToLibrary(url, { maxMb = MAX_UPLOAD_MB } = {}) {
+// Copy a public file into this site's own storage, so the page keeps working if the original goes away.
+export async function downloadToLibrary(url, { maxMb = MAX_UPLOAD_MB, label } = {}) {
   const { res, u } = await publicFetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-  let ext = EXT_BY_TYPE[type] || path.extname(u.pathname).toLowerCase();
-  if (ext === '.jpeg') ext = '.jpg';
-  if (!ALLOWED_EXT.has(ext)) throw new Error(`Unsupported file type (${type || ext || 'unknown'})`);
+  // The content type wins over the URL's extension; links often end in .php or nothing at all.
+  const name = newName(EXT_BY_TYPE[type] ? `file${EXT_BY_TYPE[type]}` : u.pathname);
+  if (!name) throw new Error(`Unsupported file type (${type || path.extname(u.pathname) || 'unknown'})`);
   const limit = maxMb * 1024 * 1024;
-  if (Number(res.headers.get('content-length')) > limit) throw new Error('File is too large');
+  if (Number(res.headers.get('content-length')) > limit) throw new Error(`File is too large (max ${maxMb} MB)`);
 
-  const name = `${crypto.randomBytes(9).toString('base64url')}${ext}`;
-  const file = path.join(UPLOAD_DIR, name);
-  const out = fs.createWriteStream(file);
   let size = 0;
+  let part = 0;
+  let pending = [];
+  let pendingSize = 0;
+  const flush = async () => {
+    await store.writePart(name, part++, Buffer.concat(pending, pendingSize));
+    pending = [];
+    pendingSize = 0;
+  };
   try {
     for await (const chunk of res.body) {
       size += chunk.length;
-      if (size > limit) throw new Error('File is too large');
-      if (!out.write(chunk)) await new Promise((r) => out.once('drain', r));
+      if (size > limit) throw new Error(`File is too large (max ${maxMb} MB)`);
+      let buf = Buffer.from(chunk);
+      while (pendingSize + buf.length >= PART_SIZE) {
+        const take = PART_SIZE - pendingSize;
+        pending.push(buf.subarray(0, take));
+        pendingSize += take;
+        buf = buf.subarray(take);
+        await flush();
+      }
+      if (buf.length) {
+        pending.push(buf);
+        pendingSize += buf.length;
+      }
     }
-    await new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve())));
+    if (pendingSize || !size) await flush();
+    let fallback = u.pathname.split('/').pop() || u.hostname;
+    try { fallback = decodeURIComponent(fallback); } catch { /* keep it encoded */ }
+    return (await store.finishFile(name, { label: String(label || fallback).slice(0, 120), size })).url;
   } catch (err) {
-    out.destroy();
-    fs.rm(file, { force: true }, () => {});
+    await store.abortFile(name).catch(() => {});
     throw err;
   }
-  return `/uploads/${name}`;
 }
 
 // Download every remote media URL in a settings patch and swap in the local copies.

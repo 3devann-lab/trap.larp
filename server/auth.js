@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { DASHBOARD_PASSWORD, SESSION_SECRET, SESSION_DAYS } from './env.js';
+import { DASHBOARD_PASSWORD, SESSION_SECRET, SESSION_DAYS, USE_VERCEL } from './env.js';
+import { store } from './store/index.js';
 
 const COOKIE = 'tl_session';
 // Changing DASHBOARD_PASSWORD (or SESSION_SECRET) signs everyone out.
@@ -46,29 +47,28 @@ export function clearSession(req, res) {
   res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${req.secure ? '; Secure' : ''}`);
 }
 
-// Simple in-memory brute-force protection: 8 failures per 15 minutes per IP.
-const attempts = new Map();
+// Brute-force protection: 8 failures per 15 minutes per IP, kept in the store so it holds
+// across Vercel's short-lived servers too.
 const WINDOW = 15 * 60 * 1000;
 
-export function login(req, res) {
+export async function login(req, res) {
   if (!DASHBOARD_PASSWORD) {
-    return res.status(503).json({ error: 'DASHBOARD_PASSWORD is not set on the server. Add it in your Railway variables and redeploy.' });
+    return res.status(503).json({ error: `DASHBOARD_PASSWORD is not set on the server. Add it in your ${USE_VERCEL ? 'Vercel' : 'Railway'} variables and redeploy.` });
   }
   const ip = req.ip || 'unknown';
   const now = Date.now();
-  const rec = attempts.get(ip) || { n: 0, first: now };
-  if (now - rec.first > WINDOW) Object.assign(rec, { n: 0, first: now });
+  let rec = await store.getLogin(ip);
+  if (!rec || now - rec.first > WINDOW) rec = { n: 0, first: now };
   if (rec.n >= 8) {
     const wait = Math.ceil((rec.first + WINDOW - now) / 60000);
     return res.status(429).json({ error: `Too many attempts. Try again in ${wait} min.` });
   }
   const given = sha(req.body?.password ?? '');
   if (!crypto.timingSafeEqual(given, sha(DASHBOARD_PASSWORD))) {
-    rec.n += 1;
-    attempts.set(ip, rec);
+    await store.setLogin(ip, { n: rec.n + 1, first: rec.first });
     return res.status(401).json({ error: 'Wrong password.' });
   }
-  attempts.delete(ip);
+  if (rec.n) await store.setLogin(ip, null);
   setSession(req, res);
   res.json({ ok: true });
 }
@@ -81,8 +81,3 @@ export function requireAuth(req, res, next) {
   }
   next();
 }
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, rec] of attempts) if (now - rec.first > WINDOW) attempts.delete(ip);
-}, WINDOW).unref();

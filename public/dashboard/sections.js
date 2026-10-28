@@ -308,19 +308,33 @@ export function importer(ctx) {
       } }, icon('lu:undo-2'), 'Restore'))) : [h('p', { class: 'muted small' }, 'Snapshots appear here after your first save.')]));
   }).catch(() => {});
 
+  const restore = async (data) => {
+    if (!await confirmBox('Restore backup?', 'This replaces all of your current settings.', 'Restore')) return;
+    ctx.replace(await api('POST', '/import/backup', data), { saved: true });
+    toast('Backup restored');
+  };
+  const backupBox = h('textarea', { class: 'input code', rows: 4, placeholder: 'Paste a copied backup here…' });
   const backup = h('div', { class: 'panel' },
     h('h4', {}, 'Backup & restore'),
     h('div', { class: 'row-gap wrap' },
-      h('a', { class: 'btn small', href: '/api/admin/export', download: '' }, icon('lu:download'), 'Download backup'),
+      // Built from the settings already loaded here, so the copy happens inside the click (Safari needs that).
+      h('button', { type: 'button', class: 'btn small', onclick: async () => {
+        const ok = await copyText(JSON.stringify({ kind: 'trap.larp-backup', v: 1, exportedAt: new Date().toISOString(), config: ctx.cfg }));
+        toast(ok ? 'Backup copied — paste it anywhere to keep it' : 'Couldn\'t copy, use Download backup instead');
+      } }, icon('lu:copy'), 'Copy backup'),
+      h('a', { class: 'btn small ghost', href: '/api/admin/export', download: '' }, icon('lu:download'), 'Download backup'),
       h('a', { class: 'btn small ghost', href: '/api/admin/export?stats=1', download: '' }, icon('lu:download'), 'Backup incl. analytics'),
       h('label', { class: 'btn small ghost' }, icon('lu:upload'), 'Restore from file', h('input', { type: 'file', accept: '.json,application/json', hidden: true, onchange: async (e) => {
-        try {
-          const data = JSON.parse(await e.target.files[0].text());
-          if (!await confirmBox('Restore backup?', 'This replaces all of your current settings.', 'Restore')) return;
-          ctx.replace(await api('POST', '/import/backup', data), { saved: true });
-          toast('Backup restored');
-        } catch (err) { toast(err.message || 'Invalid backup file'); }
+        try { await restore(JSON.parse(await e.target.files[0].text())); } catch (err) { toast(err.message || 'Invalid backup file'); }
       } }))),
+    h('details', { class: 'details' }, h('summary', {}, 'Restore a copied backup'),
+      backupBox,
+      h('div', { class: 'row-gap wrap' },
+        h('button', { type: 'button', class: 'btn small', onclick: async () => {
+          let data;
+          try { data = JSON.parse(backupBox.value); } catch { return toast('That isn\'t a valid backup — paste the whole thing you copied'); }
+          try { await restore(data); backupBox.value = ''; } catch (err) { toast(err.message); }
+        } }, icon('lu:clipboard-paste'), 'Restore pasted backup'))),
     h('h5', {}, 'Daily snapshots (last 14 days)'), snapList);
 
   const danger = h('div', { class: 'panel danger-zone' },

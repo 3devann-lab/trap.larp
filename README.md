@@ -5,6 +5,8 @@ A private, self-hosted bio-link page in the style of guns.lol, with a full custo
 - `https://your-app.up.railway.app/` is your public page
 - `https://your-app.up.railway.app/dashboard` is the password-protected editor (password comes from `DASHBOARD_PASSWORD`)
 
+It runs on [Railway](#deploy-on-railway) (the default), or for free on [Vercel with Firebase](#deploy-on-vercel-free-with-firebase).
+
 ## Features
 
 **Profile**: avatar (upload, URL or live Discord avatar), banner, display name, @handle, pronouns, bio with markdown and Discord emoji, typewriter/rotating bio lines, location, join date, UID, tags.
@@ -27,7 +29,7 @@ A private, self-hosted bio-link page in the style of guns.lol, with a full custo
 
 **Analytics**: view counter (unique or total, counted per IP address so reloading or clearing cookies can't pad it, compact format, count-up animation, carry over your old count), 30-day chart, referrers, link clicks, devices, browsers, recent visits.
 
-**Dashboard**: live preview (desktop/mobile), autosave, settings search, media library with drag-and-drop uploads, backups, daily snapshots with one-click restore, custom CSS/HTML/JS, link embed (Open Graph) settings, animated tab titles, and the guns.lol transfer.
+**Dashboard**: live preview (desktop/mobile), autosave, settings search, media library with drag-and-drop uploads, one-click "Save to database" for files linked from other sites, backups you can copy and paste, daily snapshots with one-click restore, custom CSS/HTML/JS, link embed (Open Graph) settings, animated tab titles, and the guns.lol transfer.
 
 ## Deploy on Railway
 
@@ -39,6 +41,81 @@ A private, self-hosted bio-link page in the style of guns.lol, with a full custo
 
 Optional variables are listed in `.env.example`. One worth setting is `DASHBOARD_PATH` (for example `/my-secret-panel`), which moves the dashboard off the obvious URL.
 
+## Deploy on Vercel (free, with Firebase)
+
+Vercel's servers can't keep files, so in Vercel mode everything (settings, analytics and your uploaded media) is saved in a free Firebase **Firestore** database instead. You need a Google account, a Vercel account and this repo on GitHub. No credit card is needed for either.
+
+### 1. Create the Firebase project
+
+1. Go to [console.firebase.google.com](https://console.firebase.google.com) and click **Create a project** (or **Add project**).
+2. Name it (for example `trap-larp`), click through the steps and **Create project**. You can turn Google Analytics and Gemini off; trap.larp doesn't use them.
+3. Stay on the free **Spark** plan. Don't upgrade.
+
+### 2. Create the Firestore database
+
+1. In the left menu open **Firestore Database**. Depending on your console version it's under *Build* or *Databases & Storage*.
+2. Click **Create database**.
+3. If it asks for an edition, pick **Standard**. Leave the database ID as `(default)`.
+4. Pick a location. `nam5 (United States)` is a good choice because Vercel runs your site in the US by default. You can't change it later.
+5. Choose **Start in production mode** and click **Create**. Production mode locks the database to everyone except your server, which is what you want.
+
+### 3. Download the service account key
+
+1. Click the **gear icon** next to *Project Overview* → **Project settings** → **Service accounts** tab.
+2. Click **Generate new private key** → **Generate key**. A `.json` file downloads.
+3. Treat this file like a password: it gives full access to your Firebase project. Don't commit it to GitHub or share it.
+
+Firebase also shows a "web app config" snippet (`apiKey`, `authDomain`, ...) in other places. That's for browsers and won't work here. The server needs this private key so the database can stay locked to everyone else.
+
+### 4. Deploy on Vercel
+
+1. Go to [vercel.com](https://vercel.com), sign up with GitHub (the free **Hobby** plan) and click **Add New... → Project**.
+2. **Import** your trap.larp repo. Leave *Framework Preset*, *Root Directory* and the build settings as they are; `vercel.json` in this repo takes care of them.
+3. Open **Environment Variables** and add these three:
+
+   | Key | Value |
+   | --- | --- |
+   | `USEVERCEL` | `true` |
+   | `GOOGLEFIREBASECONFIG` | The **whole contents** of the `.json` key file from step 3. Open it in a text editor, select all, copy, and paste it into the value box, from the first `{` to the last `}`. |
+   | `DASHBOARD_PASSWORD` | A strong password for your dashboard |
+
+   The names work in any capitalization (`usevercel` is fine too).
+4. Click **Deploy** and wait for it to finish (about a minute).
+5. Open `https://<your-project>.vercel.app/dashboard`, sign in with your password, and start customizing.
+
+### Changing variables later
+
+Vercel → your project → **Settings → Environment Variables**. Edit or add what you need, then go to **Deployments**, open the **⋯** menu on the latest deployment and click **Redeploy**. New values only apply after a redeploy.
+
+Optional variables:
+
+| Key | What it does |
+| --- | --- |
+| `DASHBOARD_PATH` | Moves the dashboard off `/dashboard`, for example `/my-secret-panel` |
+| `MAX_UPLOAD_MB` | Largest file you can upload. Defaults to `25` in Vercel mode |
+| `SESSION_SECRET` | Extra secret mixed into login cookies; changing it signs you out everywhere |
+| `PUBLIC_URL` | Your site address for link embeds. Picked up automatically on Vercel; only set it if embeds show the wrong domain |
+
+A custom domain goes in **Settings → Domains**.
+
+### Free plan limits
+
+- **Vercel Hobby** is free for personal, non-commercial sites.
+- **Firestore (Spark plan)** gives you 1 GB of storage, 50,000 reads and 20,000 writes per day. A counted visit uses 5 to 7 reads (more with Discord widgets) and 2 writes, so a few thousand visitors a day fits comfortably. If you ever run out, the site shows an error until the quota resets at midnight Pacific time.
+- **Uploads** are stored inside Firestore, so they share that 1 GB. Files are capped at 25 MB each by default. Vercel's CDN keeps a copy of images and other whole files after the first view, so repeat visits don't touch Firestore. For music, YouTube links take no space at all.
+- Firebase's separate file storage product (Cloud Storage) now requires a paid plan with a card, which is why trap.larp doesn't use it.
+
+### If something's wrong
+
+- **The site only shows "trap.larp isn't set up yet"**: the message under it says which variable is missing or wrong. Fix it in Vercel and redeploy.
+- **"Firebase has no Firestore database yet"**: do step 2.
+- **"Firebase refused the service account key"**: generate a new key (step 3), paste it into `GOOGLEFIREBASECONFIG` again, and redeploy.
+- **Leaked your key?** In the Firebase console → Project settings → Service accounts, click *Manage service account permissions*. That opens Google Cloud: pick the `firebase-adminsdk` account → **Keys** tab and delete the old key. Then generate a new one (step 3) and update `GOOGLEFIREBASECONFIG`.
+
+### Moving from Railway to Vercel
+
+On the old site, open Dashboard → **Import / backup** → **Copy backup**. On the new Vercel site, paste it under **Restore a copied backup**. Media files aren't part of a backup, so re-upload them. Or paste each file's full old address (`https://your-old-app.up.railway.app/uploads/...`) into its field and press **Save to database**.
+
 ## Moving over from guns.lol
 
 Dashboard → **Import / backup** → *Transfer from guns.lol*:
@@ -48,6 +125,11 @@ Dashboard → **Import / backup** → *Transfer from guns.lol*:
 3. Click the bookmark (or paste the script into the browser console). Your dashboard opens with everything it found: bio, avatar, background, music, cursor, colors, effects, socials, badges, Discord ID and view count. Untick anything you don't want and hit **Import selected**.
 
 The transfer runs inside your own logged-in browser tab, so your guns.lol password is never typed into or stored by trap.larp. By default it also copies your media files into your own library, so nothing breaks if guns.lol links change. If the dashboard tab can't receive the data automatically (some browsers block it), the bookmark offers **Copy data** / **Download .json**. Paste or load that under *"Data didn't arrive automatically?"*.
+
+## Backups and keeping your media safe
+
+- **Copy backup** (Dashboard → Import / backup) copies all your settings to the clipboard. Paste them anywhere to keep them, such as a note or a message to yourself. To restore, paste them under **Restore a copied backup**. **Download backup** saves the same thing as a `.json` file.
+- **Save to database**: when you paste a link to an image, MP3 or video hosted somewhere else into any media field, a **Save to database** button appears. It copies the file into your own storage (your Railway volume, or Firestore on Vercel) and swaps the link for your copy, so your page keeps working even if the original gets deleted. YouTube links can't be saved this way; they play straight from YouTube.
 
 ## Discord setup
 
@@ -67,6 +149,14 @@ DASHBOARD_PASSWORD=test npm run dev
 
 Then open http://localhost:3000 and http://localhost:3000/dashboard. Data is stored in `./data` unless `DATA_DIR` is set.
 
+To try Vercel mode locally against your real Firebase project:
+
+```bash
+USEVERCEL=true GOOGLEFIREBASECONFIG="$(cat path/to/your-key.json)" DASHBOARD_PASSWORD=test npm run dev
+```
+
 ## Where data lives
 
-`DATA_DIR` (the volume on Railway) contains `config.json` (all settings), `stats.json` (analytics; visitors are stored only as salted hashes), `uploads/` (your media), `media.json` (original file names) and `backups/` (14 days of daily snapshots).
+**Railway / local**: `DATA_DIR` (the volume on Railway) contains `config.json` (all settings), `stats.json` (analytics; visitors are stored only as salted hashes), `uploads/` (your media), `media.json` (original file names) and `backups/` (14 days of daily snapshots).
+
+**Vercel**: the same things live in Firestore. `site/config` and `site/stats` hold settings and analytics, `visitors` holds the salted visitor hashes, `files` holds your media (each file split into 960 KB pieces), `snapshots` holds 14 days of daily snapshots, and `logins` tracks failed sign-in attempts.
