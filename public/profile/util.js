@@ -143,6 +143,17 @@ export const sameOrigin = (u) => {
   try { return new URL(u, location.href).origin === location.origin; } catch { return false; }
 };
 
+// Video id from a YouTube link (watch, youtu.be, shorts, embed, live, music.youtube.com) or a bare id.
+export function youtubeId(url) {
+  const s = String(url || '').trim();
+  if (/^[\w-]{11}$/.test(s)) return s;
+  let u;
+  try { u = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`); } catch { return null; }
+  if (!/(^|\.)(youtube\.com|youtube-nocookie\.com|youtu\.be)$/i.test(u.hostname)) return null;
+  const id = u.hostname.endsWith('youtu.be') ? u.pathname.slice(1) : u.searchParams.get('v') || u.pathname.match(/^\/(?:embed|shorts|live|v)\/([\w-]+)/)?.[1];
+  return /^[\w-]{11}$/.test(id || '') ? id : null;
+}
+
 export const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 export const isTouch = () => window.matchMedia('(hover: none)').matches;
 

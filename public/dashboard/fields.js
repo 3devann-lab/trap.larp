@@ -1,5 +1,5 @@
 // Field editors for the dashboard. Every editor reads/writes through a { get, set } binding.
-import { h, icon, toast, isVideo } from '/static/profile/util.js';
+import { h, icon, toast, isVideo, youtubeId } from '/static/profile/util.js';
 import { PLATFORMS, PLATFORM_GROUPS, platformById } from '/shared/platforms.js';
 import { BADGE_PRESETS, badgePreset } from '/shared/badges.js';
 import { FONTS, fontHref } from '/shared/fonts.js';
@@ -91,6 +91,7 @@ const ACCEPT = { image: 'image/*', video: 'video/*', audio: 'audio/*', font: '.t
 const acceptFor = (accept) => String(accept || 'image').split(',').map((k) => ACCEPT[k.trim()] || '').filter(Boolean).join(',');
 const kindOf = (url) => {
   const u = String(url || '').toLowerCase();
+  if (youtubeId(url)) return 'youtube';
   if (isVideo(u)) return 'video';
   if (/\.(mp3|ogg|wav|m4a|aac|flac|opus|weba)(\?|$)/.test(u)) return 'audio';
   if (/\.(woff2?|ttf|otf)(\?|$)/.test(u)) return 'font';
@@ -107,7 +108,8 @@ function mediaThumb(url) {
   const box = h('div', { class: 'thumb' });
   if (!url) { box.append(icon('lu:image')); box.classList.add('empty'); return box; }
   const kind = kindOf(url);
-  if (kind === 'video') box.append(h('video', { src: url, muted: true, loop: true, autoplay: true, playsinline: true }));
+  if (kind === 'youtube') box.append(h('img', { src: `https://i.ytimg.com/vi/${youtubeId(url)}/mqdefault.jpg`, alt: '' }));
+  else if (kind === 'video') box.append(h('video', { src: url, muted: true, loop: true, autoplay: true, playsinline: true }));
   else if (kind === 'audio') {
     const audio = h('audio', { src: url, preload: 'none' });
     const btn = h('button', { type: 'button', class: 'thumb-play', 'aria-label': 'preview', onclick: () => { if (audio.paused) { audio.play(); btn.replaceChildren(icon('lu:pause')); } else { audio.pause(); btn.replaceChildren(icon('lu:play')); } } }, icon('lu:play'));
@@ -142,7 +144,7 @@ export async function openLibrary(accept, onPick) {
 
 function mediaField(field, bind) {
   const wrap = h('div', { class: 'media' });
-  const input = h('input', { class: 'input', type: 'text', placeholder: 'Upload a file or paste a URL', value: bind.get() || '' });
+  const input = h('input', { class: 'input', type: 'text', placeholder: field.placeholder || 'Upload a file or paste a URL', value: bind.get() || '' });
   const file = h('input', { type: 'file', accept: acceptFor(field.accept), hidden: true });
   const thumbSlot = h('div', {});
   const saveRemote = h('button', { type: 'button', class: 'btn small ghost', title: 'Copy this file into your own media library so it never breaks', onclick: async () => {
@@ -157,7 +159,7 @@ function mediaField(field, bind) {
   };
   const draw = () => {
     thumbSlot.replaceChildren(mediaThumb(input.value.trim()));
-    saveRemote.hidden = !/^https?:\/\//i.test(input.value.trim());
+    saveRemote.hidden = !/^https?:\/\//i.test(input.value.trim()) || kindOf(input.value.trim()) === 'youtube';
   };
   input.addEventListener('change', () => setValue(input.value));
   input.addEventListener('input', () => bind.set(input.value.trim()));

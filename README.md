@@ -19,7 +19,7 @@ A private, self-hosted bio-link page in the style of guns.lol, with a full custo
 
 **Effects**: 16 particle systems (snow, rain, stars, shooting stars, fireflies, bubbles, hearts, sakura, leaves, confetti, embers, matrix, network, orbs, emoji, custom image), CRT scanlines, film grain, VHS glitch, vignette, color filters, click effects, 9 cursor trails, custom/dot/crosshair cursors.
 
-**Music**: playlist with shuffle/repeat/fade-in, mini/full/in-card players, volume control, audio visualizers (bars, waveform, ring around avatar, card glow) and avatar pulse to the beat.
+**Music**: playlist of uploaded files or YouTube links, with shuffle/repeat/fade-in, mini/full/in-card players, volume control, audio visualizers (bars, waveform, ring around avatar, card glow) and avatar pulse to the beat.
 
 **Links**: 130+ platforms (socials, gaming, music, dev, crypto wallets with click-to-copy), 5 icon styles, brand/mono/accent/gradient colors, hover animations, link buttons.
 
