@@ -7,8 +7,7 @@ import { itemDefaults } from '/shared/schema.js';
 
 export async function api(method, path, body) {
   const opts = { method, headers: { 'x-trap': '1' } };
-  if (body instanceof FormData) opts.body = body;
-  else if (body !== undefined) { opts.headers['content-type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  if (body !== undefined) { opts.headers['content-type'] = 'application/json'; opts.body = JSON.stringify(body); }
   const res = await fetch('/api/admin' + path, opts);
   if (res.status === 401) { location.reload(); throw new Error('Signed out'); }
   const data = await res.json().catch(() => ({}));
@@ -98,10 +97,34 @@ const kindOf = (url) => {
   return 'image';
 };
 
+// Files go up in parts that each fit under Vercel's 4.5 MB request limit.
+async function uploadFile(file) {
+  const { name, partSize } = await api('POST', '/media/begin', { name: file.name, size: file.size });
+  try {
+    for (let i = 0; i * partSize < file.size; i++) {
+      const res = await fetch(`/api/admin/media/part/${name}/${i}`, {
+        method: 'PUT',
+        headers: { 'x-trap': '1', 'content-type': 'application/octet-stream' },
+        body: file.slice(i * partSize, (i + 1) * partSize),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Upload failed (${res.status})`);
+    }
+    return await api('POST', '/media/finish', { name, label: file.name, size: file.size });
+  } catch (err) {
+    api('DELETE', `/media/part/${name}`).catch(() => {});
+    throw err;
+  }
+}
+
 export async function uploadFiles(files) {
-  const fd = new FormData();
-  for (const f of files) fd.append('files', f);
-  return api('POST', '/media', fd);
+  const done = [];
+  let error = null;
+  for (const f of files) {
+    try { done.push(await uploadFile(f)); } catch (err) { error ||= err; }
+  }
+  if (!done.length) throw error || new Error('Nothing to upload.');
+  if (error) toast(error.message);
+  return done;
 }
 
 function mediaThumb(url) {
@@ -147,11 +170,12 @@ function mediaField(field, bind) {
   const input = h('input', { class: 'input', type: 'text', placeholder: field.placeholder || 'Upload a file or paste a URL', value: bind.get() || '' });
   const file = h('input', { type: 'file', accept: acceptFor(field.accept), hidden: true });
   const thumbSlot = h('div', {});
-  const saveRemote = h('button', { type: 'button', class: 'btn small ghost', title: 'Copy this file into your own media library so it never breaks', onclick: async () => {
+  // Copies a file linked from another site into this site's own storage, so it keeps working if the original is deleted.
+  const saveRemote = h('button', { type: 'button', class: 'btn small', title: 'Copy this file into your own storage so it keeps working even if the original link is deleted', onclick: async () => {
     saveRemote.disabled = true;
-    try { const r = await api('POST', '/media/fetch', { url: input.value }); setValue(r.url); toast('Saved to your library'); } catch (err) { toast(err.message); }
+    try { const r = await api('POST', '/media/fetch', { url: input.value.trim() }); setValue(r.url); toast('Saved to your database'); } catch (err) { toast(err.message); }
     saveRemote.disabled = false;
-  } }, icon('lu:download'), 'Save copy');
+  } }, icon('lu:database'), 'Save to database');
   const setValue = (v) => {
     input.value = v || '';
     bind.set(input.value.trim());
@@ -159,7 +183,8 @@ function mediaField(field, bind) {
   };
   const draw = () => {
     thumbSlot.replaceChildren(mediaThumb(input.value.trim()));
-    saveRemote.hidden = !/^https?:\/\//i.test(input.value.trim()) || kindOf(input.value.trim()) === 'youtube';
+    const v = input.value.trim();
+    saveRemote.hidden = !/^https?:\/\//i.test(v) || kindOf(v) === 'youtube' || v.startsWith(location.origin + '/');
   };
   input.addEventListener('change', () => setValue(input.value));
   input.addEventListener('input', () => bind.set(input.value.trim()));
