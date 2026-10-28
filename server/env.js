@@ -14,6 +14,9 @@ const anyCase = (name) => {
 // Vercel mode keeps everything in Firebase Firestore instead of on disk.
 export const USE_VERCEL = /^(1|true|yes|on)$/i.test(String(anyCase('USEVERCEL') || '').trim());
 export const FIREBASE_CONFIG = anyCase('GOOGLEFIREBASECONFIG') || '';
+// The Firebase user the server signs in as, when GOOGLEFIREBASECONFIG is the web app config.
+export const FIREBASE_EMAIL = (anyCase('FIREBASE_EMAIL') || '').trim();
+export const FIREBASE_PASSWORD = anyCase('FIREBASE_PASSWORD') || '';
 export const ON_VERCEL = Boolean(process.env.VERCEL);
 
 export const PORT = Number(process.env.PORT) || 3000;

@@ -2,33 +2,45 @@
 // Everything lives in Firestore, uploads included (split into 960 KB chunks), so a free
 // Spark-plan project is enough. Settings and stats are stored as JSON strings, which keeps
 // them clear of Firestore's rules about nested arrays and field names.
+//
+// GOOGLEFIREBASECONFIG takes either a service account key (Admin SDK, firestore-admin.js) or
+// the web app config plus FIREBASE_EMAIL / FIREBASE_PASSWORD (REST, firestore-rest.js).
 import crypto from 'node:crypto';
-import { initializeApp, cert } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
-import { FIREBASE_CONFIG } from '../env.js';
+import { FIREBASE_CONFIG, FIREBASE_EMAIL, FIREBASE_PASSWORD } from '../env.js';
 import { withDefaults } from '../../shared/schema.js';
 import { CHUNK_SIZE, PART_SIZE, fileInfo, typeOf, validName } from '../media.js';
+import { restAdapter } from './firestore-rest.js';
 
 // Responses to ranged requests (audio/video seeking) stop at 4 MB to stay under Vercel's
 // response limit; browsers ask for the rest as they need it.
 const MAX_RANGE = 4 * 1024 * 1024;
+const CHUNKS_PER_PART = PART_SIZE / CHUNK_SIZE;
 
-function credentials() {
+const SETUP = '(see "Deploy on Vercel" in the README), then redeploy.';
+
+async function connect() {
   const raw = FIREBASE_CONFIG.trim();
-  if (!raw) throw new Error('USEVERCEL is on but GOOGLEFIREBASECONFIG is missing. Paste your Firebase service account key into it (see "Deploy on Vercel" in the README), then redeploy.');
-  let key;
-  try {
-    key = JSON.parse(raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8'));
-  } catch {
-    throw new Error('GOOGLEFIREBASECONFIG isn\'t valid JSON. Paste the whole service account .json file, from the first { to the last }.');
+  if (!raw) throw new Error(`USEVERCEL is on but GOOGLEFIREBASECONFIG is missing. Paste your Firebase web app config or service account key into it ${SETUP}`);
+  const text = raw.includes('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
+
+  let key = null;
+  try { key = JSON.parse(text); } catch { /* not JSON: may still be a web config copied as JavaScript */ }
+  if (key?.private_key) {
+    if (!key.project_id || !key.client_email) throw new Error(`GOOGLEFIREBASECONFIG is missing project_id or client_email. Paste the whole service account .json file ${SETUP}`);
+    return (await import('./firestore-admin.js')).adminAdapter(key);
   }
-  if (key.apiKey && !key.private_key) {
-    throw new Error('GOOGLEFIREBASECONFIG holds the web app config (apiKey, authDomain...), but the server needs a service account key: Firebase console → Project settings → Service accounts → Generate new private key.');
+
+  // The web app config, as JSON or as the `const firebaseConfig = { apiKey: "..." }` snippet.
+  const pick = (name) => new RegExp(`["']?${name}["']?\\s*:\\s*["']([^"']+)["']`).exec(text)?.[1];
+  const apiKey = pick('apiKey');
+  const projectId = pick('projectId');
+  if (!apiKey || !projectId) {
+    throw new Error(`GOOGLEFIREBASECONFIG doesn't look like a Firebase config. Paste the web app config (the part from { to } with apiKey and projectId) ${SETUP}`);
   }
-  if (!key.project_id || !key.client_email || !key.private_key) {
-    throw new Error('GOOGLEFIREBASECONFIG is missing project_id, client_email or private_key. Paste the whole service account .json file.');
+  if (!FIREBASE_EMAIL || !FIREBASE_PASSWORD) {
+    throw new Error(`GOOGLEFIREBASECONFIG holds the web app config, so the server also needs the Firebase user it signs in as: add FIREBASE_EMAIL and FIREBASE_PASSWORD ${SETUP}`);
   }
-  return key;
+  return restAdapter({ apiKey, projectId, email: FIREBASE_EMAIL, password: FIREBASE_PASSWORD });
 }
 
 // Wait until the response can take more data (or the visitor went away).
@@ -42,30 +54,31 @@ const drained = (res) => new Promise((resolve) => {
   res.on('close', done);
 });
 
-export function createStore() {
-  const key = credentials();
-  const app = initializeApp({ credential: cert(key), projectId: key.project_id }, 'trap');
-  const db = getFirestore(app);
+const ADMIN_CODES = { 5: 'NOT_FOUND', 7: 'PERMISSION_DENIED', 8: 'RESOURCE_EXHAUSTED', 16: 'UNAUTHENTICATED' };
 
-  const site = db.collection('site');
-  const configRef = site.doc('config');
-  const statsRef = site.doc('stats');
-  const snapshots = db.collection('snapshots');
-  const visitors = db.collection('visitors');
-  const logins = db.collection('logins');
-  const files = db.collection('files');
-  const chunkRef = (name, i) => files.doc(name).collection('chunks').doc(String(i));
+export async function createStore() {
+  const db = await connect();
 
-  const parse = (snap, fallback) => (snap.exists ? JSON.parse(snap.get('json')) : fallback);
+  const chunkPath = (name, i) => `files/${name}/chunks/${i}`;
+  const parse = (doc, fallback) => (doc ? JSON.parse(doc.json) : fallback);
   const emptyStats = () => ({ total: 0, unique: 0, daily: {}, referrers: {}, clicks: {}, devices: {}, browsers: {}, countries: {}, recent: [] });
-  const readStats = (snap) => ({ ...emptyStats(), ...parse(snap, {}) });
-  const loginRef = (key) => logins.doc(crypto.createHash('sha256').update(key).digest('hex').slice(0, 32));
+  const readStats = (doc) => ({ ...emptyStats(), ...parse(doc, {}) });
+  const loginPath = (key) => `logins/${crypto.createHash('sha256').update(key).digest('hex').slice(0, 32)}`;
+
+  // Firestore takes at most 500 writes per commit.
+  async function commitAll(ops) {
+    for (let i = 0; i < ops.length; i += 500) await db.commit(ops.slice(i, i + 500));
+  }
+  const removeChunks = (name, count, extra) => commitAll([
+    ...Array.from({ length: count }, (_, i) => ({ remove: chunkPath(name, i) })),
+    ...extra.map((path) => ({ remove: path })),
+  ]);
 
   let prunedOn = '';
 
   return {
     async getConfig() {
-      return withDefaults(parse(await configRef.get(), {}));
+      return withDefaults(parse(await db.get('site/config'), {}));
     },
 
     async setConfig(next) {
@@ -73,118 +86,112 @@ export function createStore() {
       config.meta = { ...(config.meta || {}), updatedAt: new Date().toISOString() };
       const json = JSON.stringify(config);
       const day = new Date().toISOString().slice(0, 10);
-      const batch = db.batch();
-      batch.set(configRef, { json });
       // Keep a rolling set of daily config snapshots so a bad save can be undone.
-      batch.set(snapshots.doc(`config-${day}.json`), { json });
-      await batch.commit();
+      await db.commit([{ set: 'site/config', data: { json } }, { set: `snapshots/config-${day}.json`, data: { json } }]);
       if (prunedOn !== day) {
         prunedOn = day;
-        const refs = (await snapshots.listDocuments()).sort((a, b) => a.id.localeCompare(b.id));
-        await Promise.all(refs.slice(0, Math.max(0, refs.length - 14)).map((r) => r.delete()));
+        const ids = (await db.listIds('snapshots')).sort();
+        await commitAll(ids.slice(0, Math.max(0, ids.length - 14)).map((id) => ({ remove: `snapshots/${id}` })));
       }
       return config;
     },
 
     async listSnapshots() {
-      return (await snapshots.listDocuments()).map((r) => r.id).filter((id) => /^config-\d{4}-\d{2}-\d{2}\.json$/.test(id)).sort().reverse();
+      return (await db.listIds('snapshots')).filter((id) => /^config-\d{4}-\d{2}-\d{2}\.json$/.test(id)).sort().reverse();
     },
 
     async readSnapshot(name) {
       if (!/^config-\d{4}-\d{2}-\d{2}\.json$/.test(name)) return null;
-      return parse(await snapshots.doc(name).get(), null);
+      return parse(await db.get(`snapshots/${name}`), null);
     },
 
     async getStats() {
-      return readStats(await statsRef.get());
+      return readStats(await db.get('site/stats'));
     },
 
     async updateStats(fn) {
-      await db.runTransaction(async (t) => {
-        const stats = readStats(await t.get(statsRef));
+      await db.transaction(async (t) => {
+        const stats = readStats(await t.get('site/stats'));
         fn(stats);
-        t.set(statsRef, { json: JSON.stringify(stats) });
+        t.set('site/stats', { json: JSON.stringify(stats) });
       });
     },
 
     // A new salt makes every stored visitor id unreachable, so nobody needs deleting.
     async resetStats() {
-      await statsRef.set({ json: JSON.stringify(emptyStats()) });
+      await db.commit([{ set: 'site/stats', data: { json: JSON.stringify(emptyStats()) } }]);
     },
 
     // Runs one page view as a transaction: visitor records are separate documents
     // ({ day, at }) so the stats document doesn't grow with every new visitor.
     async visit(fn) {
-      return db.runTransaction(async (t) => {
-        const stats = readStats(await t.get(statsRef));
+      return db.transaction(async (t) => {
+        const stats = readStats(await t.get('site/stats'));
         const writes = [];
         const result = await fn({
           stats,
-          async getVisitor(id) {
-            const snap = await t.get(visitors.doc(id));
-            return snap.exists ? snap.data() : null;
-          },
+          getVisitor: (id) => t.get(`visitors/${id}`),
           setVisitor(id, rec) { writes.push([id, rec]); },
         });
         if (result.counted) {
-          t.set(statsRef, { json: JSON.stringify(stats) });
-          for (const [id, rec] of writes) t.set(visitors.doc(id), rec);
+          t.set('site/stats', { json: JSON.stringify(stats) });
+          for (const [id, rec] of writes) t.set(`visitors/${id}`, rec);
         }
         return { ...result, stats };
       });
     },
 
-    async getLogin(key) {
-      const snap = await loginRef(key).get();
-      return snap.exists ? snap.data() : null;
-    },
+    getLogin: (key) => db.get(loginPath(key)),
     async setLogin(key, rec) {
-      if (rec) await loginRef(key).set(rec);
-      else await loginRef(key).delete();
+      await db.commit([rec ? { set: loginPath(key), data: rec } : { remove: loginPath(key) }]);
     },
 
     // ---------- media ----------
+    // Each part is written with a note in uploading/{name}, so finishing only reads that note.
     async writePart(name, index, buf) {
-      const batch = db.batch();
-      for (let off = 0, i = index * (PART_SIZE / CHUNK_SIZE); off < buf.length; off += CHUNK_SIZE, i++) {
-        batch.set(chunkRef(name, i), { data: buf.subarray(off, off + CHUNK_SIZE) });
+      const ops = [];
+      for (let off = 0, i = index * CHUNKS_PER_PART; off < buf.length; off += CHUNK_SIZE, i++) {
+        ops.push({ set: chunkPath(name, i), data: { data: buf.subarray(off, off + CHUNK_SIZE) } });
       }
-      await batch.commit();
+      ops.push({ set: `uploading/${name}`, data: { [`p${index}`]: true }, merge: true });
+      await db.commit(ops);
     },
 
     async finishFile(name, { label, size }) {
-      const count = Math.ceil(size / CHUNK_SIZE);
-      const refs = Array.from({ length: count }, (_, i) => chunkRef(name, i));
-      const got = count ? await db.getAll(...refs, { fieldMask: [] }) : [];
-      if (!count || got.some((s) => !s.exists)) {
-        await db.recursiveDelete(files.doc(name));
+      const parts = Math.ceil(size / PART_SIZE);
+      const got = await db.get(`uploading/${name}`);
+      if (!parts || !got || Array.from({ length: parts }, (_, i) => got[`p${i}`]).some((p) => !p)) {
+        await this.abortFile(name);
         throw new Error('Upload was incomplete, try again.');
       }
       const mtime = Date.now();
-      await files.doc(name).set({ label, size, mtime });
+      await db.commit([{ set: `files/${name}`, data: { label, size, mtime } }, { remove: `uploading/${name}` }]);
       return fileInfo({ name, size, mtime, label });
     },
 
     async abortFile(name) {
-      await db.recursiveDelete(files.doc(name));
+      const got = await db.get(`uploading/${name}`);
+      const parts = got ? Math.max(...Object.keys(got).map((k) => Number(k.slice(1)))) + 1 : 0;
+      await removeChunks(name, parts * CHUNKS_PER_PART, [`uploading/${name}`]);
     },
 
     async listFiles() {
-      const snap = await files.orderBy('mtime', 'desc').get();
-      return snap.docs.map((d) => fileInfo({ name: d.id, ...d.data() }));
+      return (await db.list('files', { orderBy: 'mtime' })).map(({ id, data }) => fileInfo({ name: id, ...data }));
     },
 
     async removeFile(name) {
-      if (validName(name)) await db.recursiveDelete(files.doc(name));
+      if (!validName(name)) return;
+      const meta = await db.get(`files/${name}`);
+      if (meta) await removeChunks(name, Math.ceil(meta.size / CHUNK_SIZE), [`files/${name}`]);
     },
 
     async serveUploads(req, res, next) {
       try {
         const name = decodeURIComponent(req.path.slice(1));
         if (!validName(name) || !['GET', 'HEAD'].includes(req.method)) return next();
-        const snap = await files.doc(name).get();
-        if (!snap.exists) return next();
-        const { size } = snap.data();
+        const meta = await db.get(`files/${name}`);
+        if (!meta) return next();
+        const { size } = meta;
         const etag = `"${name}"`;
         res.set({
           'Content-Type': typeOf(name),
@@ -219,7 +226,7 @@ export function createStore() {
         const first = Math.floor(start / CHUNK_SIZE);
         const last = Math.floor(end / CHUNK_SIZE);
         for (let i = first; i <= last && !res.destroyed; i++) {
-          const data = (await chunkRef(name, i).get()).get('data');
+          const data = (await db.get(chunkPath(name, i)))?.data;
           if (!data) throw new Error(`missing chunk ${i} of ${name}`);
           const from = i === first ? start - i * CHUNK_SIZE : 0;
           const to = i === last ? end - i * CHUNK_SIZE + 1 : data.length;
@@ -230,6 +237,21 @@ export function createStore() {
         if (res.headersSent) res.destroy(err);
         else next(err);
       }
+    },
+
+    // Firebase problems that need a fix in the Firebase console, explained instead of "Server error".
+    describeError(err) {
+      if (err.firebaseSignIn) {
+        if (/OPERATION_NOT_ALLOWED|PASSWORD_LOGIN_DISABLED/.test(err.firebaseSignIn)) return 'Firebase sign-in is off. In the Firebase console open Authentication → Sign-in method and enable Email/Password.';
+        if (/API_KEY|API key/i.test(err.firebaseSignIn)) return 'Firebase rejected the apiKey in GOOGLEFIREBASECONFIG. Copy the web app config again from Project settings → General.';
+        return `Firebase sign-in failed (${err.firebaseSignIn}). Check that FIREBASE_EMAIL and FIREBASE_PASSWORD match the user in Authentication → Users.`;
+      }
+      const status = err.firestoreStatus || ADMIN_CODES[err.code];
+      if (status === 'NOT_FOUND') return 'Firebase has no Firestore database yet. In the Firebase console open Firestore Database → Create database, then reload.';
+      if (status === 'RESOURCE_EXHAUSTED') return 'Firestore\'s free daily quota is used up. It resets at midnight Pacific time.';
+      if (status === 'PERMISSION_DENIED' && db.uid) return `Firestore's rules blocked the server. In Firestore Database → Rules, paste the rules from the README with this user ID: ${db.uid}`;
+      if (status === 'PERMISSION_DENIED' || status === 'UNAUTHENTICATED') return `Firebase refused the service account key in GOOGLEFIREBASECONFIG: ${err.details || err.message}`;
+      return null;
     },
   };
 }
