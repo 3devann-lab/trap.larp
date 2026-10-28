@@ -67,6 +67,35 @@ Vercel's servers can't keep files, so in Vercel mode everything (settings, analy
 
 Firebase also shows a "web app config" snippet (`apiKey`, `authDomain`, ...) in other places. That's for browsers and won't work here. The server needs this private key so the database can stay locked to everyone else.
 
+#### Can't download files? Make the key in Cloud Shell instead
+
+Google Cloud Shell is a terminal that runs in your browser, so the key is made and shown there and nothing is saved to your device.
+
+1. Find your **Project ID**: Firebase console → gear icon → **Project settings** → *General* tab (it looks like `trap-larp-1a2b3`).
+2. Open [console.cloud.google.com/?cloudshell=true](https://console.cloud.google.com/?cloudshell=true), signed in with the same Google account. A terminal opens at the bottom of the page. Accept the terms if it asks.
+3. Paste these one at a time and press Enter after each. Put your Project ID in the first one. Click **Authorize** if a popup asks.
+
+   ```bash
+   gcloud config set project YOUR-PROJECT-ID
+   ```
+
+   ```bash
+   gcloud iam service-accounts keys create key.json --iam-account="$(gcloud iam service-accounts list --filter='email~^firebase-adminsdk' --format='value(email)')"
+   ```
+
+   ```bash
+   cloudshell edit key.json
+   ```
+
+4. The key opens in an editor above the terminal. Click inside it, select everything (Ctrl+A, or long-press → *Select all* on a phone), copy it, and paste it as `GOOGLEFIREBASECONFIG` in Vercel.
+5. Delete the copy left in Cloud Shell:
+
+   ```bash
+   rm key.json
+   ```
+
+If step 3 says key creation is blocked by an *organization policy*, the project belongs to a school or work Google account, which often forbids keys. Create the Firebase project with a personal Gmail account instead.
+
 ### 4. Deploy on Vercel
 
 1. Go to [vercel.com](https://vercel.com), sign up with GitHub (the free **Hobby** plan) and click **Add New... → Project**.
