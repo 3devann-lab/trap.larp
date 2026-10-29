@@ -1,6 +1,7 @@
 import { h, icon, md, stripMd, fmtNum, rgba, intToHex, cssUrl, isVideo, reducedMotion, isTouch, toast, copyText, safeUrl, youtubeId } from './util.js';
 import { Particles, CursorFx, grainTexture } from './effects.js';
 import { Player } from './player.js';
+import { commentsBlock } from './comments.js';
 import { LanyardLive, presenceWidget, avatarUrl as discordAvatar, bannerUrl, decorationUrl, badgeIconUrl, clanBadgeUrl, STATUS_COLORS, connectionLinks } from './discord.js';
 import { resolveLink, platformById } from '/shared/platforms.js';
 import { badgePreset } from '/shared/badges.js';
@@ -30,6 +31,10 @@ const slots = Object.fromEntries(SLOT_NAMES.map((n) => [n, h('div', { class: `sl
 app.append(...Object.values(slots));
 
 const calm = () => state.cfg.page.reduceMotion && reducedMotion();
+// Weak devices get lighter effects (see Particles in effects.js). Low memory or few cores, or
+// Data Saver, starts the page in lite mode; otherwise it switches if the particles start lagging.
+const weakDevice = () => navigator.deviceMemory <= 4 || navigator.hardwareConcurrency <= 4 || Boolean(navigator.connection?.saveData);
+const liteMode = () => state.cfg.fx.quality !== 'full' && (state.wentLite || weakDevice());
 const later = (fn) => { if (state.entered) fn(); else onEnter.push(fn); };
 const every = (ms, fn) => { const id = setInterval(fn, ms); cleanup.push(() => clearInterval(id)); return id; };
 
@@ -156,7 +161,7 @@ function buildBackground(cfg) {
   const layer = h('div', { class: 'bg-layer' });
   const move = h('div', { class: 'bg-move' });
   const inner = h('div', { class: 'bg-inner' + (bg.zoom && !calm() ? ' kenburns' : '') });
-  inner.style.filter = `blur(${bg.blur}px) brightness(${bg.brightness}%) saturate(${bg.saturation}%)`;
+  if (bg.blur || bg.brightness !== 100 || bg.saturation !== 100) inner.style.filter = `blur(${bg.blur}px) brightness(${bg.brightness}%) saturate(${bg.saturation}%)`;
   if (bg.blur) inner.style.inset = `-${bg.blur * 2}px`;
   let video = null;
   let slideTimer = null;
@@ -774,6 +779,13 @@ function buildStage(cfg) {
     if (L.float && !calm()) c.classList.add('floating');
   });
   const wrap = h('div', { class: 'cards' }, cards);
+  // Comments get their own card under the rest, left out of the tilt effect.
+  if (cfg.comments.enabled) {
+    const cc = card([commentsFor(cfg)], 'card-comments');
+    if (L.entrance !== 'none' && !calm()) cc.classList.add('enter', `enter-${L.entrance}`);
+    cc.style.setProperty('--ci', cards.length);
+    wrap.append(cc);
+  }
   stage.append(wrap);
   if (cfg.page.footer) stage.append(h('footer', { class: 'page-footer' }, cfg.page.footer));
 
@@ -791,8 +803,28 @@ function buildStage(cfg) {
   return stage;
 }
 
+// The comments block survives re-renders (moved into the new card), so a half-typed comment
+// isn't lost and the list isn't fetched again.
+let comments = null;
+function commentsFor(cfg) {
+  if (comments?.title !== cfg.comments.title) {
+    comments?.block.destroy();
+    comments = { title: cfg.comments.title, block: commentsBlock(cfg) };
+  }
+  return comments.block.el;
+}
+
 function enableTilt(cards, strength, glare) {
+  // Pointer events can arrive far faster than frames; only the latest one per frame is used.
+  let latest = null;
+  let raf = 0;
   const onMove = (e) => {
+    latest = e;
+    raf ||= requestAnimationFrame(apply);
+  };
+  const apply = () => {
+    raf = 0;
+    const e = latest;
     for (const c of cards) {
       const r = c.getBoundingClientRect();
       const x = (e.clientX - (r.left + r.width / 2)) / (window.innerWidth / 2);
@@ -810,7 +842,7 @@ function enableTilt(cards, strength, glare) {
   window.addEventListener('pointermove', onMove, { passive: true });
   document.addEventListener('pointerleave', onLeave);
   cards.forEach((c) => c.classList.add('tilt'));
-  cleanup.push(() => { window.removeEventListener('pointermove', onMove); document.removeEventListener('pointerleave', onLeave); });
+  cleanup.push(() => { cancelAnimationFrame(raf); window.removeEventListener('pointermove', onMove); document.removeEventListener('pointerleave', onLeave); });
 }
 
 // ---------- overlays: corner views, dock player, owner button ----------
@@ -832,12 +864,21 @@ function buildViz(cfg) {
   if (mode === 'bars' || mode === 'wave') canvas = h('canvas', { class: `viz viz-${mode}` });
   let raf = 0;
   let running = true;
+  let frame = 0;
+  let color = '#a855f7';
+  let beatShown = -1;
+  let drawn = false;
+  // Writing --beat restyles the page, so it's only written when it visibly changes, and the
+  // color is re-read twice a second rather than every frame.
   const draw = () => {
     if (!running) return;
     raf = requestAnimationFrame(draw);
     const s = player.sample();
-    root.style.setProperty('--beat', (player.beat || 0).toFixed(3));
-    const color = getComputedStyle(root).getPropertyValue('--viz').trim() || '#a855f7';
+    const beat = Math.round((player.beat || 0) * 200) / 200;
+    if (beat !== beatShown) { beatShown = beat; root.style.setProperty('--beat', beat); }
+    if (frame++ % 30 === 0) color = getComputedStyle(root).getPropertyValue('--viz').trim() || '#a855f7';
+    if (!s && !drawn) return;
+    drawn = Boolean(s);
     if (canvas) {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = window.innerWidth; const hh = 140;
@@ -909,19 +950,20 @@ function buildCursor(cfg) {
     const ring = h('div', { class: 'cur-ring', style: { borderColor: C.color } });
     el.append(dot, ring);
     const pos = { x: -100, y: -100 }; const rpos = { x: -100, y: -100 };
-    onMove = (e) => {
-      pos.x = e.clientX; pos.y = e.clientY;
-      const hot = e.target.closest?.('a,button,[role=button],input,.clickable');
-      ring.classList.toggle('hot', Boolean(hot));
-    };
-    window.addEventListener('pointermove', onMove, { passive: true });
+    // Animates only while the ring is catching up with the pointer.
     const step = () => {
       rpos.x += (pos.x - rpos.x) * 0.18; rpos.y += (pos.y - rpos.y) * 0.18;
       dot.style.transform = `translate(${pos.x}px, ${pos.y}px)`;
       ring.style.transform = `translate(${rpos.x}px, ${rpos.y}px)`;
-      raf = requestAnimationFrame(step);
+      raf = Math.abs(pos.x - rpos.x) + Math.abs(pos.y - rpos.y) > 0.3 ? requestAnimationFrame(step) : 0;
     };
-    step();
+    onMove = (e) => {
+      pos.x = e.clientX; pos.y = e.clientY;
+      const hot = e.target.closest?.('a,button,[role=button],input,.clickable');
+      ring.classList.toggle('hot', Boolean(hot));
+      if (!raf) raf = requestAnimationFrame(step);
+    };
+    window.addEventListener('pointermove', onMove, { passive: true });
   }
   // DOM click effects (ripple / floating text / emoji)
   let onClick = null;
@@ -1067,6 +1109,7 @@ function render() {
   onEnter = [];
   const cfg = state.cfg;
   applyVars(cfg);
+  document.body.classList.toggle('lite', liteMode());
   live.watch(cfg.discord.userId);
   if (cfg.discord.userId && state.dprofileFor !== cfg.discord.userId) refreshDiscordProfile();
 
@@ -1077,7 +1120,12 @@ function render() {
   keep('fx', JSON.stringify(fxKeyObj) + calm(), () => {
     if (cfg.fx.particles === 'none' || calm()) return { el: null };
     const canvas = h('canvas', { class: 'fx-canvas' + (cfg.fx.front ? ' front' : '') });
-    const p = new Particles(canvas, { type: cfg.fx.particles, color: cfg.fx.color, density: cfg.fx.density, speed: cfg.fx.speed, size: cfg.fx.size, opacity: cfg.fx.opacity, interactive: cfg.fx.interactive, emoji: cfg.fx.emoji, image: cfg.fx.image });
+    const p = new Particles(canvas, {
+      type: cfg.fx.particles, color: cfg.fx.color, density: cfg.fx.density, speed: cfg.fx.speed, size: cfg.fx.size, opacity: cfg.fx.opacity, interactive: cfg.fx.interactive, emoji: cfg.fx.emoji, image: cfg.fx.image,
+      lite: liteMode(),
+      adaptive: cfg.fx.quality !== 'full',
+      onLite: () => { state.wentLite = true; document.body.classList.add('lite'); },
+    });
     return { el: canvas, destroy: () => p.destroy() };
   });
   keep('filters', JSON.stringify([cfg.fx.vignette, cfg.fx.scanlines, cfg.fx.grain, cfg.fx.vhs, cfg.fx.tint, calm()]), () => buildFilters(cfg));

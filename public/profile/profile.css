@@ -30,10 +30,11 @@ button { font: inherit; color: inherit; }
 .bg-inner .slide { position: absolute; inset: 0; opacity: 0; transition: opacity 1.4s ease; }
 .bg-inner .slide.on { opacity: 1; }
 .bg-overlay { position: absolute; inset: 0; }
-.grad-drift { background-size: 220% 220% !important; animation: gradDrift 18s ease-in-out infinite alternate; }
+/* The gradient layer is oversized and slid with a transform, which the GPU handles without repainting. */
+.grad-drift { inset: -10% -130% -130% -10% !important; animation: gradDrift 18s ease-in-out infinite alternate; will-change: transform; }
 .grad-spin { inset: -50% !important; animation: spin 40s linear infinite; }
 .kenburns { animation: kenburns 30s ease-in-out infinite alternate; }
-@keyframes gradDrift { 0% { background-position: 0% 30%; } 100% { background-position: 100% 70%; } }
+@keyframes gradDrift { 0% { transform: translate(0, -15%); } 100% { transform: translate(-50%, -35%); } }
 @keyframes kenburns { from { transform: scale(1); } to { transform: scale(1.15) translate(-2%, -1%); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -61,6 +62,8 @@ button { font: inherit; color: inherit; }
   text-align: center;
 }
 body.has-shadow .card { box-shadow: 0 0 var(--card-glow) var(--card-glow-color), 0 30px 80px -20px rgba(0, 0, 0, .65); }
+/* Lite mode (weak devices): a lighter blur costs the GPU far less and looks nearly the same. */
+body.lite .card { backdrop-filter: blur(min(var(--card-blur), 8px)) saturate(1.2); -webkit-backdrop-filter: blur(min(var(--card-blur), 8px)) saturate(1.2); }
 body.card-solid .card { backdrop-filter: none; -webkit-backdrop-filter: none; }
 body.card-outline .card { background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
 body.card-transparent .card, body.layout-minimal .card { background: transparent; border-color: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: none; }
@@ -453,3 +456,36 @@ body.calm *, body.calm *::before, body.calm *::after { animation-duration: 0s !i
   .links-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
   [data-tip]::after { display: none; }
 }
+
+/* ---------- comments ---------- */
+.card-comments { text-align: left; }
+.block-comments { display: flex; flex-direction: column; gap: 14px; }
+.cm-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: calc(1.05em * var(--scale)); color: var(--text); }
+.cm-title .ico { width: 18px; height: 18px; color: var(--accent); }
+.cm-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.cm { display: flex; gap: 10px; align-items: flex-start; }
+.cm-av { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; flex: none; background: rgba(255, 255, 255, .08); }
+.cm-av-letter { display: grid; place-items: center; font-weight: 700; color: var(--text); }
+.cm-av-letter .ico { width: 16px; height: 16px; color: var(--muted); }
+.cm-body { min-width: 0; flex: 1; }
+.cm-head { display: flex; align-items: baseline; gap: 6px; font-size: .88em; min-width: 0; }
+.cm-name { color: var(--text); max-width: 45%; }
+.cm-user { color: var(--muted); max-width: 35%; }
+.cm-head time { color: var(--muted); font-size: .9em; margin-left: auto; flex: none; }
+.cm-text { margin: 3px 0 0; color: var(--text); opacity: .92; font-size: .92em; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.cm-empty, .cm-note { margin: 0; font-size: .9em; }
+.cm-form { display: flex; flex-direction: column; gap: 8px; }
+.cm-row { display: flex; gap: 8px; align-items: center; }
+.cm-row > .cm-input { flex: 1; min-width: 0; }
+.cm-input { font: inherit; font-size: .92em; color: var(--text); background: rgba(0, 0, 0, .25); border: 1px solid rgba(255, 255, 255, .12); border-radius: 10px; padding: 8px 10px; outline: none; }
+.cm-input:focus { border-color: var(--accent); }
+.cm-textarea { resize: vertical; min-height: 64px; }
+.cm-foot { justify-content: space-between; }
+.cm-count { font-size: .8em; color: var(--muted); }
+.cm-count.over { color: #f87171; }
+.cm-btn { font: inherit; font-size: .88em; font-weight: 600; color: #fff; background: var(--accent); border: 1px solid transparent; border-radius: 10px; padding: 7px 14px; cursor: pointer; }
+.cm-btn.ghost { background: transparent; color: var(--text); border-color: rgba(255, 255, 255, .16); }
+.cm-btn:disabled { opacity: .5; cursor: default; }
+.cm-more { align-self: center; }
+.cm-error { margin: 0; font-size: .85em; color: #f87171; }
+.cm-trap { position: absolute; left: -10000px; width: 1px; height: 1px; opacity: 0; }

@@ -75,6 +75,7 @@ export async function createStore() {
   ]);
 
   let prunedOn = '';
+  let saltCache = null;
 
   return {
     async getConfig() {
@@ -237,6 +238,82 @@ export async function createStore() {
         if (res.headersSent) res.destroy(err);
         else next(err);
       }
+    },
+
+    // ---------- comments ----------
+    // The salt is created once, in a transaction so two servers can't each make their own.
+    async commentSalt() {
+      saltCache ||= db.transaction(async (t) => {
+        const doc = await t.get('site/comments');
+        if (doc?.salt) return doc.salt;
+        const salt = crypto.randomBytes(16).toString('hex');
+        t.set('site/comments', { salt });
+        return salt;
+      }).catch((err) => { saltCache = null; throw err; });
+      return saltCache;
+    },
+
+    async hasCommented(ipHash) { return Boolean(await db.get(`commentIps/${ipHash}`)); },
+
+    // Saves the comment unless this IP already has one (kept after the comment is deleted, so
+    // its author can't simply post again); returns whether it was saved.
+    addComment(comment, ipHash) {
+      const { id, ...data } = comment;
+      return db.transaction(async (t) => {
+        if (await t.get(`commentIps/${ipHash}`)) return false;
+        t.set(`commentIps/${ipHash}`, { at: comment.at, id });
+        t.set(`comments/${id}`, data);
+        return true;
+      });
+    },
+
+    async listComments({ limit, before }) {
+      const rows = await db.list('comments', { orderBy: 'at', limit: limit + 1, before });
+      return { comments: rows.slice(0, limit).map(({ id, data }) => ({ id, ...data })), more: rows.length > limit };
+    },
+
+    async removeComment(id) {
+      const data = await db.get(`comments/${id}`);
+      if (!data) return null;
+      await db.commit([{ remove: `comments/${id}` }]);
+      return { id, ...data };
+    },
+
+    async putAvatar(name, buf) {
+      const count = Math.ceil(buf.length / CHUNK_SIZE);
+      await db.commit([
+        { set: `avatars/${name}`, data: { size: buf.length } },
+        ...Array.from({ length: count }, (_, i) => ({ set: `avatars/${name}/chunks/${i}`, data: { data: buf.subarray(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE) } })),
+      ]);
+    },
+
+    async getAvatar(name) {
+      const meta = await db.get(`avatars/${name}`);
+      if (!meta) return null;
+      const parts = await Promise.all(Array.from({ length: Math.ceil(meta.size / CHUNK_SIZE) }, (_, i) => db.get(`avatars/${name}/chunks/${i}`)));
+      return parts.every(Boolean) ? Buffer.concat(parts.map((p) => p.data)) : null;
+    },
+
+    async removeAvatar(name) {
+      const meta = await db.get(`avatars/${name}`);
+      if (!meta) return;
+      await commitAll([
+        ...Array.from({ length: Math.ceil(meta.size / CHUNK_SIZE) }, (_, i) => ({ remove: `avatars/${name}/chunks/${i}` })),
+        { remove: `avatars/${name}` },
+      ]);
+    },
+
+    // Fixed-window counter shared by every server: at most `max` hits per `windowMs`.
+    async hit(bucket, key, windowMs, max) {
+      const path = `limits/${bucket}-${crypto.createHash('sha256').update(key).digest('hex').slice(0, 32)}`;
+      return db.transaction(async (t) => {
+        const now = Date.now();
+        let rec = await t.get(path);
+        if (!rec || now - rec.start >= windowMs) rec = { start: now, n: 0 };
+        rec = { start: rec.start, n: rec.n + 1 };
+        t.set(path, rec);
+        return { ok: rec.n <= max, retryIn: Math.ceil((rec.start + windowMs - now) / 1000) };
+      });
     },
 
     // Firebase problems that need a fix in the Firebase console, explained instead of "Server error".

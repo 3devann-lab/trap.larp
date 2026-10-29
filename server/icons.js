@@ -19,7 +19,7 @@ export const UI_ICONS = [
   'monitor-smartphone', 'mouse-pointer-click', 'gamepad-2', 'disc-3', 'radio', 'headphones', 'eye-off', 'undo-2', 'lock',
   'arrow-up-right', 'list-music', 'shield-check', 'tv', 'laptop', 'tablet-smartphone', 'mail', 'star', 'git-fork', 'book-open',
   'user', 'shuffle', 'timer', 'ellipsis', 'film', 'file-audio', 'type', 'folder-open', 'square-pen', 'menu', 'sun-moon',
-  'database', 'clipboard-paste',
+  'database', 'clipboard-paste', 'message-square',
 ];
 
 const brand = new Map();

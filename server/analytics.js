@@ -36,7 +36,7 @@ function refHost(ref, selfHost) {
 
 // One visitor = one network address. IPv6 hosts are normally handed a whole /64 and can hop
 // between addresses inside it at will, so the /64 counts as one visitor.
-function ipKey(ip) {
+export function ipKey(ip) {
   ip = String(ip || '').replace(/%.*$/, '');
   const v4 = /^(?:::ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
   if (v4) return v4[1];

@@ -29,6 +29,10 @@ It runs on [Railway](#deploy-on-railway) (the default), or for free on [Vercel w
 
 **Analytics**: view counter (unique or total, counted per IP address so reloading or clearing cookies can't pad it, compact format, count-up animation, carry over your old count), 30-day chart, referrers, link clicks, devices, browsers, recent visits.
 
+**Comments**: an optional comments section under your profile. Visitors leave one comment each (one per IP address), up to 200 characters, with a name, @username and an optional picture. You read and delete them in the dashboard.
+
+**Performance**: effects lighten themselves on weak phones and computers (particles at 30 fps with fewer of them, a softer card blur) and switch over automatically if the page starts to stutter. You can force full quality in Effects → Performance.
+
 **Dashboard**: live preview (desktop/mobile), autosave, settings search, media library with drag-and-drop uploads, one-click "Save to database" for files linked from other sites, backups you can copy and paste, daily snapshots with one-click restore, custom CSS/HTML/JS, link embed (Open Graph) settings, animated tab titles, and the guns.lol transfer.
 
 ## Deploy on Railway
@@ -142,6 +146,7 @@ A custom domain goes in **Settings → Domains**.
 - **Vercel Hobby** is free for personal, non-commercial sites.
 - **Firestore (Spark plan)** gives you 1 GB of storage, 50,000 reads and 20,000 writes per day. A counted visit uses 5 to 7 reads (more with Discord widgets) and 2 writes, so a few thousand visitors a day fits comfortably. If you ever run out, the site shows an error until the quota resets at midnight Pacific time.
 - **Uploads** are stored inside Firestore, so they share that 1 GB. Files are capped at 25 MB each by default. Vercel's CDN keeps a copy of images and other whole files after the first view, so repeat visits don't touch Firestore. For music, YouTube links take no space at all.
+- **Comments** only cost anything when a visitor scrolls down to them: about 22 reads to show a page of 20 comments, and a handful of reads and writes to post one.
 - Firebase's separate file storage product (Cloud Storage) now requires a paid plan with a card, which is why trap.larp doesn't use it.
 
 ### If something's wrong
@@ -174,6 +179,15 @@ The transfer runs inside your own logged-in browser tab, so your guns.lol passwo
 - **Copy backup** (Dashboard → Import / backup) copies all your settings to the clipboard. Paste them anywhere to keep them, such as a note or a message to yourself. To restore, paste them under **Restore a copied backup**. **Download backup** saves the same thing as a `.json` file.
 - **Save to database**: when you paste a link to an image, MP3 or video hosted somewhere else into any media field, a **Save to database** button appears. It copies the file into your own storage (your Railway volume, or Firestore on Vercel) and swaps the link for your copy, so your page keeps working even if the original gets deleted. YouTube links can't be saved this way; they play straight from YouTube.
 
+## Comments
+
+Turn them on in Dashboard → **Comments**. They appear in their own card under your profile, and only load when a visitor scrolls to them.
+
+- **Who can post:** one comment per IP address. Different addresses on the same home IPv6 network count as one. Deleting a comment doesn't free that address up again, so someone you deleted can't just post again.
+- **What they can post:** a display name (up to 32 characters), an @username (2–24 letters, numbers, `_` or `.`), a message of up to 200 characters, and optionally a picture. Pictures must be PNG, JPEG or WebP and at most 3 MB; GIFs, videos and animated images are refused. The visitor's browser shrinks the picture to 256 × 256 before sending, which also strips hidden data like a photo's location. Nobody can use your own name or @handle.
+- **Protection:** the server checks every picture's actual contents, not just its name, and refuses huge dimensions. Messages are cleaned of invisible and direction-flipping characters and always shown as plain text, so HTML or scripts in them never run. Each IP gets 5 tries every 10 minutes and 120 reads a minute. The whole site takes at most 60 new comments an hour, in case many addresses flood it at once. A signed form token, a hidden trap field for bots and an origin check stop scripted and cross-site posting.
+- **Moderation:** Dashboard → **Comments** lists every comment with a **Delete** button.
+
 ## Discord setup
 
 1. Discord → Settings → Advanced → turn on **Developer Mode**, then right-click yourself → **Copy User ID**.
@@ -200,6 +214,6 @@ USEVERCEL=true GOOGLEFIREBASECONFIG='{"apiKey":"...","projectId":"..."}' FIREBAS
 
 ## Where data lives
 
-**Railway / local**: `DATA_DIR` (the volume on Railway) contains `config.json` (all settings), `stats.json` (analytics; visitors are stored only as salted hashes), `uploads/` (your media), `media.json` (original file names) and `backups/` (14 days of daily snapshots).
+**Railway / local**: `DATA_DIR` (the volume on Railway) contains `config.json` (all settings), `stats.json` (analytics; visitors are stored only as salted hashes), `uploads/` (your media), `media.json` (original file names), `backups/` (14 days of daily snapshots), `comments.json` (comments, and the salted hashes of IPs that have commented) and `avatars/` (commenters' pictures).
 
-**Vercel**: the same things live in Firestore. `site/config` and `site/stats` hold settings and analytics, `visitors` holds the salted visitor hashes, `files` holds your media (each file split into 960 KB pieces), `uploading` tracks uploads in progress, `snapshots` holds 14 days of daily snapshots, and `logins` tracks failed sign-in attempts.
+**Vercel**: the same things live in Firestore. `site/config` and `site/stats` hold settings and analytics, `visitors` holds the salted visitor hashes, `files` holds your media (each file split into 960 KB pieces), `uploading` tracks uploads in progress, `snapshots` holds 14 days of daily snapshots, `logins` tracks failed sign-in attempts, `comments` and `avatars` hold comments and their pictures, `commentIps` holds the salted hashes of IPs that have commented, and `limits` holds the rate-limit counters.

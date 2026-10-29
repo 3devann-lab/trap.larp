@@ -349,3 +349,45 @@ export function importer(ctx) {
   root.append(transfer, backup, danger);
   return root;
 }
+
+// ---------- comments (moderation) ----------
+export function comments() {
+  const list = h('div', { class: 'cm-admin' });
+  const more = h('button', { type: 'button', class: 'btn small ghost', hidden: true }, 'Show older');
+  let last = 0;
+  const row = (c) => {
+    const el = h('div', { class: 'cm-admin-row' },
+      c.avatar ? h('img', { class: 'cm-admin-av', src: c.avatar, alt: '', loading: 'lazy' }) : h('span', { class: 'cm-admin-av' }, [...c.name][0]?.toUpperCase() || '?'),
+      h('div', { class: 'cm-admin-body' },
+        h('div', {}, h('b', {}, c.name), ' ', h('span', { class: 'muted' }, `@${c.username} · ${new Date(c.at).toLocaleString()}`)),
+        h('div', { class: 'cm-admin-text' }, c.text)),
+      h('button', { type: 'button', class: 'btn small danger', onclick: async () => {
+        if (!await confirmBox('Delete this comment?', 'It disappears from your page. Its author still can\'t post another one from the same connection.', 'Delete', true)) return;
+        try {
+          await api('DELETE', `/comments/${encodeURIComponent(c.id)}`);
+          el.remove();
+          if (!list.children.length) list.append(h('p', { class: 'muted small' }, 'No comments yet.'));
+          toast('Comment deleted');
+        } catch (err) { toast(err.message); }
+      } }, icon('lu:trash-2'), 'Delete'));
+    return el;
+  };
+  const load = async (before) => {
+    more.disabled = true;
+    try {
+      const data = await api('GET', `/comments${before ? `?before=${before}` : ''}`);
+      if (!before) list.replaceChildren();
+      list.append(...data.comments.map(row));
+      if (!list.children.length) list.append(h('p', { class: 'muted small' }, 'No comments yet.'));
+      last = data.comments.at(-1)?.at || last;
+      more.hidden = !data.more;
+    } catch (err) {
+      list.replaceChildren(h('p', { class: 'muted small' }, err.message));
+    } finally {
+      more.disabled = false;
+    }
+  };
+  more.addEventListener('click', () => load(last));
+  load();
+  return h('div', { class: 'panel' }, h('h4', {}, 'Comments on your page'), list, more);
+}

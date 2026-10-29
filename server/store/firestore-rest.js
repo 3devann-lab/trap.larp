@@ -114,11 +114,14 @@ export function restAdapter({ apiKey, projectId, email, password }) {
       }
     },
 
-    async list(collection, { orderBy } = {}) {
+    // Newest first by `orderBy`; `before` continues after that value, `limit` caps the page.
+    async list(collection, { orderBy, limit, before } = {}) {
       const rows = await call('POST', `${base}:runQuery`, {
         structuredQuery: {
           from: [{ collectionId: collection }],
           ...(orderBy ? { orderBy: [{ field: { fieldPath: orderBy }, direction: 'DESCENDING' }] } : {}),
+          ...(orderBy && before !== undefined ? { startAt: { values: [encode(before)], before: false } } : {}),
+          ...(limit ? { limit } : {}),
         },
       });
       return rows.filter((r) => r.document).map((r) => ({ id: r.document.name.split('/').pop(), data: fromDoc(r.document) }));

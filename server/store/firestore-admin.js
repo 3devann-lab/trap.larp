@@ -30,9 +30,12 @@ export function adminAdapter(key) {
       }));
     },
 
-    async list(collection, { orderBy } = {}) {
+    // Newest first by `orderBy`; `before` continues after that value, `limit` caps the page.
+    async list(collection, { orderBy, limit, before } = {}) {
       let query = db.collection(collection);
       if (orderBy) query = query.orderBy(orderBy, 'desc');
+      if (orderBy && before !== undefined) query = query.startAfter(before);
+      if (limit) query = query.limit(limit);
       return (await query.get()).docs.map((d) => ({ id: d.id, data: d.data() }));
     },
 
