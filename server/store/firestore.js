@@ -74,13 +74,37 @@ export async function createStore() {
     ...extra.map((path) => ({ remove: path })),
   ]);
 
+  // Public pages read settings and stats through a 5-second cache, so a flood of page loads
+  // costs a bounded number of reads; requests that arrive together share one read. Saving
+  // updates this server's copy at once (other servers within 5 seconds); the dashboard reads fresh.
+  const ttlCache = (load) => {
+    let value = null;
+    let at = 0;
+    let pending = null;
+    const get = ({ fresh } = {}) => {
+      if (!fresh && value && Date.now() - at < 5000) return Promise.resolve(value);
+      pending ||= load().then((v) => { value = v; at = Date.now(); return v; }).finally(() => { pending = null; });
+      return pending;
+    };
+    get.set = (v) => { value = v; at = Date.now(); };
+    return get;
+  };
+  const configCache = ttlCache(async () => withDefaults(parse(await db.get('site/config'), {})));
+  const statsCache = ttlCache(async () => readStats(await db.get('site/stats')));
+
   let prunedOn = '';
   let saltCache = null;
+  let secretCache = null;
+  const randomOnce = (path, field, bytes) => db.transaction(async (t) => {
+    const doc = await t.get(path);
+    if (doc?.[field]) return doc[field];
+    const value = crypto.randomBytes(bytes).toString('hex');
+    t.set(path, { ...doc, [field]: value });
+    return value;
+  });
 
   return {
-    async getConfig() {
-      return withDefaults(parse(await db.get('site/config'), {}));
-    },
+    getConfig: configCache,
 
     async setConfig(next) {
       const config = withDefaults(next);
@@ -94,6 +118,7 @@ export async function createStore() {
         const ids = (await db.listIds('snapshots')).sort();
         await commitAll(ids.slice(0, Math.max(0, ids.length - 14)).map((id) => ({ remove: `snapshots/${id}` })));
       }
+      configCache.set(config);
       return config;
     },
 
@@ -106,21 +131,22 @@ export async function createStore() {
       return parse(await db.get(`snapshots/${name}`), null);
     },
 
-    async getStats() {
-      return readStats(await db.get('site/stats'));
-    },
+    getStats: statsCache,
 
     async updateStats(fn) {
-      await db.transaction(async (t) => {
+      statsCache.set(await db.transaction(async (t) => {
         const stats = readStats(await t.get('site/stats'));
         fn(stats);
         t.set('site/stats', { json: JSON.stringify(stats) });
-      });
+        return stats;
+      }));
     },
 
     // A new salt makes every stored visitor id unreachable, so nobody needs deleting.
     async resetStats() {
-      await db.commit([{ set: 'site/stats', data: { json: JSON.stringify(emptyStats()) } }]);
+      const stats = emptyStats();
+      await db.commit([{ set: 'site/stats', data: { json: JSON.stringify(stats) } }]);
+      statsCache.set(readStats(null));
     },
 
     // Runs one page view as a transaction: visitor records are separate documents
@@ -139,6 +165,9 @@ export async function createStore() {
           for (const [id, rec] of writes) t.set(`visitors/${id}`, rec);
         }
         return { ...result, stats };
+      }).then((out) => {
+        statsCache.set(out.stats);
+        return out;
       });
     },
 
@@ -240,17 +269,17 @@ export async function createStore() {
       }
     },
 
+    // Random key material for signing logins and form tokens. Created once, in a transaction
+    // so two servers can't each make their own.
+    async serverSecret() {
+      secretCache ||= randomOnce('site/secret', 'key', 32);
+      return secretCache.catch((err) => { secretCache = null; throw err; });
+    },
+
     // ---------- comments ----------
-    // The salt is created once, in a transaction so two servers can't each make their own.
     async commentSalt() {
-      saltCache ||= db.transaction(async (t) => {
-        const doc = await t.get('site/comments');
-        if (doc?.salt) return doc.salt;
-        const salt = crypto.randomBytes(16).toString('hex');
-        t.set('site/comments', { salt });
-        return salt;
-      }).catch((err) => { saltCache = null; throw err; });
-      return saltCache;
+      saltCache ||= randomOnce('site/comments', 'salt', 16);
+      return saltCache.catch((err) => { saltCache = null; throw err; });
     },
 
     async hasCommented(ipHash) { return Boolean(await db.get(`commentIps/${ipHash}`)); },

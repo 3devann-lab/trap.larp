@@ -126,6 +126,8 @@ With a key the database can stay in production mode as created in step 2; no rul
 4. Click **Deploy** and wait for it to finish (about a minute).
 5. Open `https://<your-project>.vercel.app/dashboard`, sign in with your dashboard password, and start customizing.
 
+Saved changes show up on your page within about 5 seconds: each of Vercel's servers keeps your settings for a few seconds, so a flood of visitors can't use up Firestore's free daily reads.
+
 ### Changing variables later
 
 Vercel → your project → **Settings → Environment Variables**. Edit or add what you need, then go to **Deployments**, open the **⋯** menu on the latest deployment and click **Redeploy**. New values only apply after a redeploy.
@@ -185,7 +187,7 @@ Turn them on in Dashboard → **Comments**. They appear in their own card under 
 
 - **Who can post:** one comment per IP address. Different addresses on the same home IPv6 network count as one. Deleting a comment doesn't free that address up again, so someone you deleted can't just post again.
 - **What they can post:** a display name (up to 32 characters), an @username (2–24 letters, numbers, `_` or `.`), a message of up to 200 characters, and optionally a picture. Pictures must be PNG, JPEG or WebP and at most 3 MB; GIFs, videos and animated images are refused. The visitor's browser shrinks the picture to 256 × 256 before sending, which also strips hidden data like a photo's location. Nobody can use your own name or @handle.
-- **Protection:** the server checks every picture's actual contents, not just its name, and refuses huge dimensions. Messages are cleaned of invisible and direction-flipping characters and always shown as plain text, so HTML or scripts in them never run. Each IP gets 5 tries every 10 minutes and 120 reads a minute. The whole site takes at most 60 new comments an hour, in case many addresses flood it at once. A signed form token, a hidden trap field for bots and an origin check stop scripted and cross-site posting.
+- **Protection:** the server checks every picture's actual contents, not just its name, and refuses huge dimensions. Messages are cleaned of invisible and direction-flipping characters and always shown as plain text, so HTML or scripts in them never run. Each IP gets 5 tries to post every 10 minutes and 30 list loads a minute. The whole site takes at most 60 new comments an hour, in case many addresses flood it at once. A signed form token, a hidden trap field for bots and an origin check stop scripted and cross-site posting.
 - **Moderation:** Dashboard → **Comments** lists every comment with a **Delete** button.
 
 ## Discord setup
@@ -196,6 +198,17 @@ Turn them on in Dashboard → **Comments**. They appear in their own card under 
 4. Use **Check connection** to confirm the live status and profile details are coming through.
 
 Live presence comes from [Lanyard](https://github.com/Phineas/lanyard). Bio, banner, badges and your equipped profile effect come from the public `dcdn.dstn.to` profile API, and the effects catalog from `@discord-user-card/profile-effects`.
+
+## Security
+
+- **Use a long dashboard password.** At least 12 characters; a few random words works well. The dashboard warns you if it's shorter. Wrong passwords are limited to 8 every 15 minutes per IP address (IPv6 per /64 network).
+- **Hide the dashboard.** Set `DASHBOARD_PATH` to something hard to guess. The path isn't shown to visitors anywhere, including robots.txt and the page source.
+- **What's already handled:**
+  - **Logins:** they're signed with a random key kept in your storage, so nothing visitors can see helps them guess your password.
+  - **Flood limits:** every public endpoint has a per-IP limit, so request floods are turned away before they cost database reads or writes.
+  - **Pages:** they can't be framed by other sites.
+  - **"Save to database":** it refuses private and internal network addresses.
+  - **Comments:** see above.
 
 ## Running locally
 
@@ -214,6 +227,6 @@ USEVERCEL=true GOOGLEFIREBASECONFIG='{"apiKey":"...","projectId":"..."}' FIREBAS
 
 ## Where data lives
 
-**Railway / local**: `DATA_DIR` (the volume on Railway) contains `config.json` (all settings), `stats.json` (analytics; visitors are stored only as salted hashes), `uploads/` (your media), `media.json` (original file names), `backups/` (14 days of daily snapshots), `comments.json` (comments, and the salted hashes of IPs that have commented) and `avatars/` (commenters' pictures).
+**Railway / local**: `DATA_DIR` (the volume on Railway) contains `config.json` (all settings), `stats.json` (analytics; visitors are stored only as salted hashes), `uploads/` (your media), `media.json` (original file names), `backups/` (14 days of daily snapshots), `comments.json` (comments, and the salted hashes of IPs that have commented), `avatars/` (commenters' pictures) and `secret.key` (a random key for signing logins; keep it private).
 
-**Vercel**: the same things live in Firestore. `site/config` and `site/stats` hold settings and analytics, `visitors` holds the salted visitor hashes, `files` holds your media (each file split into 960 KB pieces), `uploading` tracks uploads in progress, `snapshots` holds 14 days of daily snapshots, `logins` tracks failed sign-in attempts, `comments` and `avatars` hold comments and their pictures, `commentIps` holds the salted hashes of IPs that have commented, and `limits` holds the rate-limit counters.
+**Vercel**: the same things live in Firestore. `site/config` and `site/stats` hold settings and analytics, `visitors` holds the salted visitor hashes, `files` holds your media (each file split into 960 KB pieces), `uploading` tracks uploads in progress, `snapshots` holds 14 days of daily snapshots, `logins` tracks failed sign-in attempts, `comments` and `avatars` hold comments and their pictures, `commentIps` holds the salted hashes of IPs that have commented, `limits` holds the rate-limit counters, and `site/secret` holds a random key for signing logins.

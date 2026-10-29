@@ -1,13 +1,30 @@
 import crypto from 'node:crypto';
 import { DASHBOARD_PASSWORD, SESSION_SECRET, SESSION_DAYS, USE_VERCEL } from './env.js';
 import { store } from './store/index.js';
+import { ipKey } from './analytics.js';
 
 const COOKIE = 'tl_session';
-// Changing DASHBOARD_PASSWORD (or SESSION_SECRET) signs everyone out.
-const secret = crypto.createHash('sha256').update(`trap.larp|${SESSION_SECRET}|${DASHBOARD_PASSWORD}`).digest();
+
+// The signing key mixes a random secret kept in storage with the password. Without it, a session
+// cookie or a comment form token (which anyone can get) would let someone test password guesses
+// offline. Changing DASHBOARD_PASSWORD or SESSION_SECRET still signs everyone out.
+let secret = null;
+let ready = null;
+export function authReady() {
+  ready ||= store.serverSecret().then((s) => {
+    secret = crypto.createHash('sha256').update(`trap.larp|${s}|${SESSION_SECRET}|${DASHBOARD_PASSWORD}`).digest();
+  }).catch((err) => {
+    ready = null;
+    throw err;
+  });
+  return ready;
+}
 
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
-const hmac = (data) => crypto.createHmac('sha256', secret).update(data).digest('base64url');
+const hmac = (data) => {
+  if (!secret) throw new Error('Signing key not loaded yet.');
+  return crypto.createHmac('sha256', secret).update(data).digest('base64url');
+};
 // Signs short values (like comment form tokens) with the same server secret as logins.
 export const sign = hmac;
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest();
@@ -22,7 +39,7 @@ export function parseCookies(req) {
 }
 
 export function isAuthed(req) {
-  if (!DASHBOARD_PASSWORD) return false;
+  if (!DASHBOARD_PASSWORD || !secret) return false;
   const raw = parseCookies(req)[COOKIE];
   if (!raw) return false;
   const [payload, sig] = raw.split('.');
@@ -57,7 +74,8 @@ export async function login(req, res) {
   if (!DASHBOARD_PASSWORD) {
     return res.status(503).json({ error: `DASHBOARD_PASSWORD is not set on the server. Add it in your ${USE_VERCEL ? 'Vercel' : 'Railway'} variables and redeploy.` });
   }
-  const ip = req.ip || 'unknown';
+  // Keyed by IP with IPv6 counted per /64, so hopping between addresses doesn't reset the count.
+  const ip = ipKey(req.ip) || 'unknown';
   const now = Date.now();
   let rec = await store.getLogin(ip);
   if (!rec || now - rec.first > WINDOW) rec = { n: 0, first: now };

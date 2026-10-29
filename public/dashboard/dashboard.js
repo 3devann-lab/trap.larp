@@ -76,7 +76,7 @@ const shell = h('div', { class: 'shell' + (previewOpen ? ' with-preview' : '') }
     search, nav,
     h('div', { class: 'side-foot' },
       h('a', { class: 'side-link', href: '/', target: '_blank' }, icon('lu:external-link'), 'View my page'),
-      h('button', { type: 'button', class: 'side-link', onclick: async () => { await fetch('/api/auth/logout', { method: 'POST' }); location.reload(); } }, icon('lu:log-out'), 'Sign out'))),
+      h('button', { type: 'button', class: 'side-link', onclick: async () => { await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-trap': '1' } }); location.reload(); } }, icon('lu:log-out'), 'Sign out'))),
   h('main', { class: 'main' },
     h('header', { class: 'top' },
       h('button', { type: 'button', class: 'icon-btn menu-btn', 'aria-label': 'menu', onclick: () => shell.classList.toggle('nav-open') }, icon('lu:menu')),
@@ -85,6 +85,7 @@ const shell = h('div', { class: 'shell' + (previewOpen ? ' with-preview' : '') }
       saveBtn,
       h('button', { type: 'button', class: 'btn ghost preview-toggle', onclick: () => togglePreview() }, icon('lu:eye'), h('span', {}, 'Preview'))),
     DASH.ephemeral ? h('div', { class: 'notice warn' }, icon('lu:circle-alert'), h('div', {}, h('b', {}, 'No volume attached. '), 'Railway wipes the disk on every deploy, so your settings and uploads will disappear. In Railway: your service → Settings → Volumes → add a volume mounted at ', h('code', {}, '/data'), '.')) : null,
+    DASH.weakPassword ? h('div', { class: 'notice warn' }, icon('lu:circle-alert'), h('div', {}, h('b', {}, 'Your dashboard password is short. '), 'Anyone who guesses it can change your page. Set ', h('code', {}, 'DASHBOARD_PASSWORD'), ' to at least 12 characters (a few random words works well) and redeploy.')) : null,
     content),
   preview);
 document.getElementById('dash').append(shell);

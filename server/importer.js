@@ -3,6 +3,8 @@
 import path from 'node:path';
 import dns from 'node:dns/promises';
 import net from 'node:net';
+import http from 'node:http';
+import https from 'node:https';
 import { MAX_UPLOAD_MB } from './env.js';
 import { store } from './store/index.js';
 import { EXT_BY_TYPE, PART_SIZE, newName } from './media.js';
@@ -316,13 +318,34 @@ export function normalizeGuns(payload) {
 export const MEDIA_KEYS = ['profile.avatar', 'profile.banner', 'bg.image', 'bg.video', 'cursor.image', 'page.favicon'];
 
 // ---------- media downloader ----------
-function privateIp(ip) {
-  if (net.isIPv4(ip)) {
-    const [a, b] = ip.split('.').map(Number);
-    return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
-  }
-  const v = ip.toLowerCase();
-  return v === '::1' || v === '::' || v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe80') || v.startsWith('::ffff:127.') || v.startsWith('::ffff:10.') || v.startsWith('::ffff:192.168.');
+// Addresses a fetch must never reach: private, loopback, link-local (cloud metadata lives at
+// 169.254.169.254), carrier-grade NAT, multicast and reserved ranges, plus IPv6 ranges that can
+// wrap an IPv4 address (NAT64 64:ff9b::/96, 6to4 2002::/16). BlockList applies the IPv4 rules to
+// IPv4-mapped forms like ::ffff:127.0.0.1 by itself.
+const BLOCKED = new net.BlockList();
+for (const [a, p] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['224.0.0.0', 3]]) BLOCKED.addSubnet(a, p, 'ipv4');
+for (const [a, p] of [['::', 96], ['64:ff9b::', 96], ['100::', 64], ['2001:db8::', 32], ['2002::', 16], ['fc00::', 7], ['fe80::', 10], ['fec0::', 10], ['ff00::', 8]]) BLOCKED.addSubnet(a, p, 'ipv6');
+const blockedIp = (ip) => BLOCKED.check(ip, net.isIPv6(ip) ? 'ipv6' : 'ipv4');
+
+// The name is resolved once, every address is checked, and the connection goes to exactly the
+// checked address, so DNS can't swap in a private one between the check and the connection.
+function guardedLookup(hostname, options, cb) {
+  dns.lookup(hostname, { all: true }).then((addrs) => {
+    if (!addrs.length || addrs.some((a) => blockedIp(a.address))) return cb(new Error('That host is not reachable from here'));
+    if (options.all) cb(null, addrs);
+    else cb(null, addrs[0].address, addrs[0].family);
+  }, () => cb(new Error('That host is not reachable from here')));
+}
+
+function get(u) {
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  // IP literals skip DNS (and so the lookup above), so they're checked here.
+  if (net.isIP(host) && blockedIp(host)) return Promise.reject(new Error('That host is not reachable from here'));
+  return new Promise((resolve, reject) => {
+    const req = (u.protocol === 'https:' ? https : http).get(u, { headers: { 'user-agent': 'trap.larp media importer' }, lookup: guardedLookup, timeout: 60_000 }, resolve);
+    req.on('timeout', () => req.destroy(new Error('Timed out')));
+    req.on('error', reject);
+  });
 }
 
 // Fetch a public URL, re-checking every redirect hop so it can't be bounced to a private address.
@@ -332,14 +355,16 @@ async function publicFetch(url) {
     let u;
     try { u = new URL(current); } catch { throw new Error('Invalid URL'); }
     if (!/^https?:$/.test(u.protocol)) throw new Error('Only http(s) URLs can be downloaded');
-    const addrs = await dns.lookup(u.hostname, { all: true }).catch(() => []);
-    if (!addrs.length || addrs.some((a) => privateIp(a.address))) throw new Error('That host is not reachable from here');
-    const res = await fetch(u, { redirect: 'manual', signal: AbortSignal.timeout(60_000), headers: { 'user-agent': 'trap.larp media importer' } });
-    if ([301, 302, 303, 307, 308].includes(res.status) && res.headers.get('location')) {
-      current = new URL(res.headers.get('location'), u).href;
+    const res = await get(u);
+    if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+      res.resume();
+      current = new URL(res.headers.location, u).href;
       continue;
     }
-    return { res, u };
+    return {
+      u,
+      res: { ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, headers: { get: (name) => res.headers[name.toLowerCase()] ?? null }, body: res },
+    };
   }
   throw new Error('Too many redirects');
 }
@@ -347,13 +372,15 @@ async function publicFetch(url) {
 // Copy a public file into this site's own storage, so the page keeps working if the original goes away.
 export async function downloadToLibrary(url, { maxMb = MAX_UPLOAD_MB, label } = {}) {
   const { res, u } = await publicFetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  // Anything refused before the body is read still has to let go of the connection.
+  const refuse = (message) => { res.body.destroy(); throw new Error(message); };
+  if (!res.ok) refuse(`HTTP ${res.status}`);
   const type = String(res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
   // The content type wins over the URL's extension; links often end in .php or nothing at all.
   const name = newName(EXT_BY_TYPE[type] ? `file${EXT_BY_TYPE[type]}` : u.pathname);
-  if (!name) throw new Error(`Unsupported file type (${type || path.extname(u.pathname) || 'unknown'})`);
+  if (!name) refuse(`Unsupported file type (${type || path.extname(u.pathname) || 'unknown'})`);
   const limit = maxMb * 1024 * 1024;
-  if (Number(res.headers.get('content-length')) > limit) throw new Error(`File is too large (max ${maxMb} MB)`);
+  if (Number(res.headers.get('content-length')) > limit) refuse(`File is too large (max ${maxMb} MB)`);
 
   let size = 0;
   let part = 0;

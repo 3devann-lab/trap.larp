@@ -6,6 +6,9 @@ const UA = 'trap.larp (self-hosted bio page)';
 const cache = new Map();
 
 async function cached(key, ttlMs, fn) {
+  // Lookups can be triggered by visitors (app icons), so the cache can't grow forever.
+  if (cache.size > 5000) for (const [k, v] of cache) if (!v.pending && v.exp < Date.now()) cache.delete(k);
+  if (cache.size > 5000) cache.clear();
   const hit = cache.get(key);
   if (hit && hit.exp > Date.now()) return hit.value;
   if (hit?.pending) return hit.pending;

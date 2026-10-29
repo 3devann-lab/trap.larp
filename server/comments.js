@@ -5,6 +5,7 @@ import express from 'express';
 import { store } from './store/index.js';
 import { ipKey } from './analytics.js';
 import { sign, isAuthed } from './auth.js';
+import { allow } from './limits.js';
 
 export const MAX_TEXT = 200;
 export const MAX_AVATAR_BYTES = 3 * 1024 * 1024;
@@ -15,19 +16,33 @@ const PAGE = 20;
 const LIMITS = {
   post: [10 * 60e3, 5], // attempts to post, including rejected ones
   postAll: [60 * 60e3, 60], // new comments site-wide, against floods from many IPs
-  read: [60e3, 120], // comment list and pictures (a page of comments is up to 21 requests)
+  list: [60e3, 30], // comment list requests
+  pictures: [60e3, 150], // commenters' pictures (a page shows up to 20)
 };
-// Reads are limited per server in memory, so browsing comments doesn't spend database writes.
-const readHits = new Map();
-function readLimit(key) {
-  const [windowMs, max] = LIMITS.read;
-  const now = Date.now();
-  let rec = readHits.get(key);
-  if (!rec || now - rec.start >= windowMs) rec = { start: now, n: 0 };
-  rec.n += 1;
-  readHits.set(key, rec);
-  if (readHits.size > 20000) for (const [k, r] of readHits) if (now - r.start > windowMs) readHits.delete(k);
-  return rec.n <= max;
+
+// ---------- caches ----------
+// Each server keeps pages of comments for 30 seconds and remembers who has commented, so a
+// flood of visitors (or of fake ones) costs a bounded number of database reads.
+const PAGE_TTL = 30e3;
+const pages = new Map();
+const commented = new Map();
+const forget = () => pages.clear();
+async function hasCommented(hash) {
+  const hit = commented.get(hash);
+  if (hit && Date.now() - hit.at < (hit.value ? 3600e3 : 60e3)) return hit.value;
+  const value = await store.hasCommented(hash);
+  if (commented.size > 20000) commented.clear();
+  commented.set(hash, { value, at: Date.now() });
+  return value;
+}
+async function listPage(before) {
+  const key = before || 0;
+  const hit = pages.get(key);
+  if (hit && Date.now() - hit.at < PAGE_TTL) return hit.value;
+  const value = await store.listComments({ limit: PAGE, before });
+  if (pages.size > 200) pages.clear();
+  pages.set(key, { value, at: Date.now() });
+  return value;
 }
 
 // ---------- text ----------
@@ -128,15 +143,16 @@ publicComments.use(wrap(async (req, res, next) => {
 
 publicComments.get('/', wrap(async (req, res) => {
   const ip = ipKey(req.ip);
-  if (!readLimit(ip)) return deny(res, 429, 'Slow down a little.', 60);
+  const ok = allow('comments', ip, ...LIMITS.list);
+  if (!ok.ok) return deny(res, 429, 'Slow down a little.', ok.retryIn);
   const before = Number(req.query.before) || undefined;
-  const [page, mine] = await Promise.all([store.listComments({ limit: PAGE, before }), store.hasCommented(await ipHash(ip))]);
+  const [page, mine] = await Promise.all([listPage(before), hasCommented(await ipHash(ip))]);
   res.json({ comments: page.comments.map(toPublic), more: page.more, canPost: !mine, token: tokenFor(ip) });
 }));
 
 publicComments.get('/avatar/:name', wrap(async (req, res) => {
   if (!validAvatar(req.params.name)) return res.status(404).end();
-  if (!readLimit(ipKey(req.ip))) return res.status(429).end();
+  if (!allow('comment-pictures', ipKey(req.ip), ...LIMITS.pictures).ok) return res.status(429).end();
   const buf = await store.getAvatar(req.params.name);
   if (!buf) return res.status(404).end();
   res.set({
@@ -156,12 +172,15 @@ publicComments.post('/', wrap(async (req, res) => {
   if (req.get('x-trap-comment') !== '1' || (origin && origin !== `${req.protocol}://${req.get('host')}`)) return deny(res, 403, 'Not allowed.');
   const ip = ipKey(req.ip);
   if (!ip) return deny(res, 400, 'Could not post.');
-  const limit = await store.hit('comment-post', ip, ...LIMITS.post);
-  if (!limit.ok) return deny(res, 429, `Too many tries. Wait ${Math.ceil(limit.retryIn / 60)} min.`, limit.retryIn);
-
+  // Counted in memory first, so hammering this endpoint can't spend database writes; then in
+  // the database, so the limit also holds across servers.
+  const local = allow('comment-post', ip, ...LIMITS.post);
+  if (!local.ok) return deny(res, 429, `Too many tries. Wait ${Math.ceil(local.retryIn / 60)} min.`, local.retryIn);
   const body = req.body || {};
   if (body.homepage) return deny(res, 400, 'Could not post.'); // honeypot field real visitors never see
   if (!tokenOk(body.token, ip)) return deny(res, 400, 'The form expired or was sent too fast. Reload and try again.');
+  const limit = await store.hit('comment-post', ip, ...LIMITS.post);
+  if (!limit.ok) return deny(res, 429, `Too many tries. Wait ${Math.ceil(limit.retryIn / 60)} min.`, limit.retryIn);
 
   const name = clean(body.name);
   const username = clean(body.username).replace(/^@/, '');
@@ -185,7 +204,7 @@ publicComments.post('/', wrap(async (req, res) => {
   }
 
   const hash = await ipHash(ip);
-  if (await store.hasCommented(hash)) return deny(res, 409, 'You already left a comment here.');
+  if (await hasCommented(hash)) return deny(res, 409, 'You already left a comment here.');
   const all = await store.hit('comment-post-all', 'all', ...LIMITS.postAll);
   if (!all.ok) return deny(res, 429, 'Lots of comments right now. Try again later.', all.retryIn);
 
@@ -196,6 +215,8 @@ publicComments.post('/', wrap(async (req, res) => {
     if (avatar) await store.removeAvatar(comment.avatar);
     return deny(res, 409, 'You already left a comment here.');
   }
+  commented.set(hash, { value: true, at: Date.now() });
+  forget();
   res.status(201).json(toPublic(comment));
 }));
 
@@ -211,5 +232,6 @@ adminComments.delete('/:id', wrap(async (req, res) => {
   if (!/^[\w-]{12}$/.test(req.params.id)) return res.status(400).json({ error: 'Bad id.' });
   const removed = await store.removeComment(req.params.id);
   if (removed?.avatar) await store.removeAvatar(removed.avatar);
+  forget();
   res.json({ ok: Boolean(removed) });
 }));

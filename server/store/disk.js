@@ -12,6 +12,7 @@ const STATS_FILE = path.join(DATA_DIR, 'stats.json');
 const META_FILE = path.join(DATA_DIR, 'media.json');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 const COMMENTS_FILE = path.join(DATA_DIR, 'comments.json');
+const SECRET_FILE = path.join(DATA_DIR, 'secret.key');
 const AVATAR_DIR = path.join(DATA_DIR, 'avatars');
 
 function readJson(file, fallback) {
@@ -87,7 +88,21 @@ export function createStore() {
   const readMeta = () => readJson(META_FILE, {});
   const writeMeta = (m) => fs.writeFileSync(META_FILE, JSON.stringify(m));
 
+  let secret = '';
+
   return {
+    // Random key material for signing logins and form tokens, created on first use.
+    async serverSecret() {
+      if (!secret) {
+        try { secret = fs.readFileSync(SECRET_FILE, 'utf8').trim(); } catch { /* not created yet */ }
+        if (!secret) {
+          secret = crypto.randomBytes(32).toString('hex');
+          fs.writeFileSync(SECRET_FILE, secret, { mode: 0o600 });
+        }
+      }
+      return secret;
+    },
+
     async getConfig() { return config; },
 
     async setConfig(next) {
