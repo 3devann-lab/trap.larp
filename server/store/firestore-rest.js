@@ -114,11 +114,13 @@ export function restAdapter({ apiKey, projectId, email, password }) {
       }
     },
 
-    // Newest first by `orderBy`; `before` continues after that value, `limit` caps the page.
-    async list(collection, { orderBy, limit, before } = {}) {
+    // Newest first by `orderBy`; `before` continues after that value, `limit` caps the page,
+    // `where` is a [field, value] equality filter.
+    async list(collection, { orderBy, limit, before, where } = {}) {
       const rows = await call('POST', `${base}:runQuery`, {
         structuredQuery: {
           from: [{ collectionId: collection }],
+          ...(where ? { where: { fieldFilter: { field: { fieldPath: where[0] }, op: 'EQUAL', value: encode(where[1]) } } } : {}),
           ...(orderBy ? { orderBy: [{ field: { fieldPath: orderBy }, direction: 'DESCENDING' }] } : {}),
           ...(orderBy && before !== undefined ? { startAt: { values: [encode(before)], before: false } } : {}),
           ...(limit ? { limit } : {}),

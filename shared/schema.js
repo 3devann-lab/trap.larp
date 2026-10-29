@@ -500,6 +500,7 @@ export const SECTIONS = [
         title: 'Comments', desc: 'Visitors can leave one comment each (one per IP address), up to 200 characters, with an optional PNG, JPEG or WebP picture up to 3 MB.', fields: [
           { key: 'comments.enabled', type: 'toggle', label: 'Show a comments section on my page', default: false },
           { key: 'comments.title', type: 'text', label: 'Section title', default: 'Comments', show: (c) => c.comments.enabled },
+          { key: 'comments.blocked', type: 'lines', label: 'Blocked words', default: [], help: 'One word or phrase per line. Comments are refused if the message, display name or @handle contains one, even in CAPS, fancy fonts (𝓵𝓲𝓴𝓮 𝓽𝓱𝓲𝓼), look-alike letters, b4d spellings, with dots or spaces between letters, or inside another word. That last part means blocking "ass" also blocks "class". Visitors never see this list.' },
         ],
       },
     ],

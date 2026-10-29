@@ -288,3 +288,13 @@ code { font-family: ui-monospace, monospace; background: rgba(255, 255, 255, .08
 .cm-admin-av { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; flex: none; display: grid; place-items: center; background: var(--panel2); font-weight: 700; }
 .cm-admin-body { flex: 1; min-width: 0; font-size: 13px; }
 .cm-admin-text { margin-top: 3px; overflow-wrap: anywhere; }
+.cm-admin-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
+.cm-badge { display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 11px; font-weight: 600; background: rgba(34, 197, 94, .14); color: #86efac; }
+.cm-unlock { display: flex; gap: 8px; margin: 12px 0 10px; max-width: 360px; }
+.cm-handles { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cm-handle { display: inline-flex; align-items: center; gap: 6px; padding: 3px 3px 3px 10px; border: 1px solid var(--line2); border-radius: 99px; background: var(--bg2); font-size: 13px; font-weight: 600; }
+.cm-handle .btn { border-radius: 99px; padding: 3px 9px; }
+@media (max-width: 600px) {
+  .cm-admin-row { flex-wrap: wrap; }
+  .cm-admin-actions { flex-direction: row; width: 100%; padding-left: 44px; }
+}
