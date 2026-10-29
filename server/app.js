@@ -292,18 +292,9 @@ app.use('/api/admin', admin);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found.' }));
 app.use((req, res) => res.redirect(302, '/'));
-// Firestore problems that need a fix in the Firebase console, explained instead of "Server error".
-function firebaseHint(err) {
-  if (!USE_VERCEL || typeof err.code !== 'number') return null;
-  if (err.code === 5) return 'Firebase has no Firestore database yet. In the Firebase console open Firestore Database → Create database, then reload.';
-  if (err.code === 8) return 'Firestore\'s free daily quota is used up. It resets at midnight Pacific time.';
-  if (err.code === 7 || err.code === 16) return `Firebase refused the service account key in GOOGLEFIREBASECONFIG: ${err.details || err.message}`;
-  return null;
-}
-
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   const status = err.status || err.statusCode || 500;
   if (status >= 500) console.error('[server]', err);
-  if (!res.headersSent) res.status(status).json({ error: status >= 500 ? firebaseHint(err) || 'Server error.' : err.message });
+  if (!res.headersSent) res.status(status).json({ error: status >= 500 ? store?.describeError?.(err) || 'Server error.' : err.message });
 });

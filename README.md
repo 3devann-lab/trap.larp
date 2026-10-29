@@ -57,60 +57,70 @@ Vercel's servers can't keep files, so in Vercel mode everything (settings, analy
 2. Click **Create database**.
 3. If it asks for an edition, pick **Standard**. Leave the database ID as `(default)`.
 4. Pick a location. `nam5 (United States)` is a good choice because Vercel runs your site in the US by default. You can't change it later.
-5. Choose **Start in production mode** and click **Create**. Production mode locks the database to everyone except your server, which is what you want.
+5. Choose **Start in production mode** and click **Create**. Production mode starts with the database locked to everyone; step 3 decides who gets in.
 
-### 3. Download the service account key
+### 3. Give the server access to Firebase
+
+Pick **one** of these two ways. **A** needs nothing but the Firebase console. **B** needs you to download a file.
+
+#### A. A Firebase login (no download)
+
+The server signs in to Firebase as a user you create, and a security rule lets only that user into the database.
+
+1. **Copy the web app config.** Click the **gear icon** next to *Project Overview* → **Project settings** → *General* tab, and scroll to **Your apps**. Click the web icon **`</>`**, give it any nickname (leave *Firebase Hosting* unticked) and click **Register app**. Firebase shows code like this:
+
+   ```js
+   const firebaseConfig = {
+     apiKey: "AIza...",
+     authDomain: "your-project.firebaseapp.com",
+     projectId: "your-project",
+     ...
+   };
+   ```
+
+   Copy it and keep it for step 4. Everything from `{` to `}` is enough, but copying the whole block is fine too. If you already registered an app, the same code is under **Your apps** → *SDK setup and configuration* → **Config**.
+2. **Turn on email sign-in.** In the left menu open **Authentication** → **Get started** → **Sign-in method** tab → **Email/Password**. Turn on the first switch and click **Save**.
+3. **Create the site's user.** **Authentication** → **Users** tab → **Add user**. Use any email address; it doesn't have to be real, and nothing is sent to it. Pick a strong password that's different from your dashboard password. After it's added, copy the user's **User UID** from the list.
+4. **Lock the database to that user.** **Firestore Database** → **Rules** tab. Replace everything there with this, put your User UID in place of `PASTE-USER-UID-HERE`, and click **Publish**:
+
+   ```
+   rules_version = '2';
+   service cloud.firestore {
+     match /databases/{database}/documents {
+       match /{document=**} {
+         allow read, write: if request.auth != null && request.auth.uid == 'PASTE-USER-UID-HERE';
+       }
+     }
+   }
+   ```
+
+The web config isn't secret on its own; the rule is what keeps everyone else out. The user's password is secret, though: anyone who has it can change your database.
+
+#### B. A service account key (needs a download)
 
 1. Click the **gear icon** next to *Project Overview* → **Project settings** → **Service accounts** tab.
 2. Click **Generate new private key** → **Generate key**. A `.json` file downloads.
 3. Treat this file like a password: it gives full access to your Firebase project. Don't commit it to GitHub or share it.
 
-Firebase also shows a "web app config" snippet (`apiKey`, `authDomain`, ...) in other places. That's for browsers and won't work here. The server needs this private key so the database can stay locked to everyone else.
-
-#### Can't download files? Make the key in Cloud Shell instead
-
-Google Cloud Shell is a terminal that runs in your browser, so the key is made and shown there and nothing is saved to your device.
-
-1. Find your **Project ID**: Firebase console → gear icon → **Project settings** → *General* tab (it looks like `trap-larp-1a2b3`).
-2. Open [console.cloud.google.com/?cloudshell=true](https://console.cloud.google.com/?cloudshell=true), signed in with the same Google account. A terminal opens at the bottom of the page. Accept the terms if it asks.
-3. Paste these one at a time and press Enter after each. Put your Project ID in the first one. Click **Authorize** if a popup asks.
-
-   ```bash
-   gcloud config set project YOUR-PROJECT-ID
-   ```
-
-   ```bash
-   gcloud iam service-accounts keys create key.json --iam-account="$(gcloud iam service-accounts list --filter='email~^firebase-adminsdk' --format='value(email)')"
-   ```
-
-   ```bash
-   cloudshell edit key.json
-   ```
-
-4. The key opens in an editor above the terminal. Click inside it, select everything (Ctrl+A, or long-press → *Select all* on a phone), copy it, and paste it as `GOOGLEFIREBASECONFIG` in Vercel.
-5. Delete the copy left in Cloud Shell:
-
-   ```bash
-   rm key.json
-   ```
-
-If step 3 says key creation is blocked by an *organization policy*, the project belongs to a school or work Google account, which often forbids keys. Create the Firebase project with a personal Gmail account instead.
+With a key the database can stay in production mode as created in step 2; no rules or users are needed.
 
 ### 4. Deploy on Vercel
 
 1. Go to [vercel.com](https://vercel.com), sign up with GitHub (the free **Hobby** plan) and click **Add New... → Project**.
 2. **Import** your trap.larp repo. Leave *Framework Preset*, *Root Directory* and the build settings as they are; `vercel.json` in this repo takes care of them.
-3. Open **Environment Variables** and add these three:
+3. Open **Environment Variables** and add these:
 
    | Key | Value |
    | --- | --- |
    | `USEVERCEL` | `true` |
-   | `GOOGLEFIREBASECONFIG` | The **whole contents** of the `.json` key file from step 3. Open it in a text editor, select all, copy, and paste it into the value box, from the first `{` to the last `}`. |
    | `DASHBOARD_PASSWORD` | A strong password for your dashboard |
+   | `GOOGLEFIREBASECONFIG` | **If you used A:** the web app config you copied.<br>**If you used B:** the whole contents of the `.json` key file, from the first `{` to the last `}`. |
+   | `FIREBASE_EMAIL` | **A only:** the email of the user you created |
+   | `FIREBASE_PASSWORD` | **A only:** that user's password |
 
    The names work in any capitalization (`usevercel` is fine too).
 4. Click **Deploy** and wait for it to finish (about a minute).
-5. Open `https://<your-project>.vercel.app/dashboard`, sign in with your password, and start customizing.
+5. Open `https://<your-project>.vercel.app/dashboard`, sign in with your dashboard password, and start customizing.
 
 ### Changing variables later
 
@@ -138,8 +148,12 @@ A custom domain goes in **Settings → Domains**.
 
 - **The site only shows "trap.larp isn't set up yet"**: the message under it says which variable is missing or wrong. Fix it in Vercel and redeploy.
 - **"Firebase has no Firestore database yet"**: do step 2.
-- **"Firebase refused the service account key"**: generate a new key (step 3), paste it into `GOOGLEFIREBASECONFIG` again, and redeploy.
-- **Leaked your key?** In the Firebase console → Project settings → Service accounts, click *Manage service account permissions*. That opens Google Cloud: pick the `firebase-adminsdk` account → **Keys** tab and delete the old key. Then generate a new one (step 3) and update `GOOGLEFIREBASECONFIG`.
+- **"Firebase sign-in failed"** (way A): `FIREBASE_EMAIL` or `FIREBASE_PASSWORD` doesn't match the user in Authentication → Users.
+- **"Firebase sign-in is off"** (way A): do step 3A.2.
+- **"Firestore's rules blocked the server"** (way A): do step 3A.4. The message shows the exact User ID to put in the rule.
+- **"Firebase refused the service account key"** (way B): generate a new key (step 3B), paste it into `GOOGLEFIREBASECONFIG` again, and redeploy.
+- **Leaked the password (A)?** In Authentication → Users, delete the user and add a new one. Put its UID in the rule (3A.4), then update `FIREBASE_EMAIL` and `FIREBASE_PASSWORD`.
+- **Leaked the key (B)?** In the Firebase console → Project settings → Service accounts, click *Manage service account permissions*. That opens Google Cloud: pick the `firebase-adminsdk` account → **Keys** tab and delete the old key. Then generate a new one (step 3B) and update `GOOGLEFIREBASECONFIG`.
 
 ### Moving from Railway to Vercel
 
@@ -178,14 +192,14 @@ DASHBOARD_PASSWORD=test npm run dev
 
 Then open http://localhost:3000 and http://localhost:3000/dashboard. Data is stored in `./data` unless `DATA_DIR` is set.
 
-To try Vercel mode locally against your real Firebase project:
+To try Vercel mode locally against your real Firebase project, set the same variables as on Vercel, for example:
 
 ```bash
-USEVERCEL=true GOOGLEFIREBASECONFIG="$(cat path/to/your-key.json)" DASHBOARD_PASSWORD=test npm run dev
+USEVERCEL=true GOOGLEFIREBASECONFIG='{"apiKey":"...","projectId":"..."}' FIREBASE_EMAIL=you@example.com FIREBASE_PASSWORD=... DASHBOARD_PASSWORD=test npm run dev
 ```
 
 ## Where data lives
 
 **Railway / local**: `DATA_DIR` (the volume on Railway) contains `config.json` (all settings), `stats.json` (analytics; visitors are stored only as salted hashes), `uploads/` (your media), `media.json` (original file names) and `backups/` (14 days of daily snapshots).
 
-**Vercel**: the same things live in Firestore. `site/config` and `site/stats` hold settings and analytics, `visitors` holds the salted visitor hashes, `files` holds your media (each file split into 960 KB pieces), `snapshots` holds 14 days of daily snapshots, and `logins` tracks failed sign-in attempts.
+**Vercel**: the same things live in Firestore. `site/config` and `site/stats` hold settings and analytics, `visitors` holds the salted visitor hashes, `files` holds your media (each file split into 960 KB pieces), `uploading` tracks uploads in progress, `snapshots` holds 14 days of daily snapshots, and `logins` tracks failed sign-in attempts.

@@ -8,12 +8,12 @@ let setupError = '';
 
 if (USE_VERCEL) {
   try {
-    store = (await import('./firestore.js')).createStore();
+    store = await (await import('./firestore.js')).createStore();
   } catch (err) {
     setupError = err.message;
   }
 } else if (ON_VERCEL) {
-  setupError = 'This is running on Vercel, which can\'t keep files. Add the environment variables USEVERCEL=true and GOOGLEFIREBASECONFIG (see "Deploy on Vercel" in the README), then redeploy.';
+  setupError = 'This is running on Vercel, which can\'t keep files. Add the environment variable USEVERCEL=true and your Firebase settings (see "Deploy on Vercel" in the README), then redeploy.';
 } else {
   store = (await import('./disk.js')).createStore();
 }
