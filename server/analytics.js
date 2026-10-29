@@ -1,11 +1,21 @@
 import crypto from 'node:crypto';
 import net from 'node:net';
 import { store } from './store/index.js';
+import { USE_VERCEL } from './env.js';
 
 const BOT_RE = /bot|crawl|spider|slurp|preview|embed|facebookexternalhit|whatsapp|curl|wget|python|node-fetch|axios|headless|lighthouse|monitor/i;
 
 const day = (d = new Date()) => d.toISOString().slice(0, 10);
 const inc = (obj, key, n = 1) => { obj[key] = (obj[key] || 0) + n; };
+// Like inc, but keeps only the `cap` biggest entries. Referrers come from visitors, and an
+// unbounded list could grow the stats past Firestore's 1 MB document limit and stop counting.
+function incTop(obj, key, cap) {
+  inc(obj, key);
+  const keys = Object.keys(obj);
+  if (keys.length <= cap) return;
+  keys.sort((a, b) => obj[a] - obj[b]);
+  for (const k of keys.slice(0, keys.length - cap)) if (k !== key) delete obj[k];
+}
 
 function device(ua) {
   if (/ipad|tablet|(android(?!.*mobile))/i.test(ua)) return 'tablet';
@@ -57,7 +67,10 @@ export async function recordView(req, { referrer, cooldownMinutes }) {
   const windowMs = Math.max(1, Number(cooldownMinutes) || 30) * 6e4;
   const now = Date.now();
   const today = day();
-  const country = String(req.get('cf-ipcountry') || req.get('x-vercel-ip-country') || '').toUpperCase().slice(0, 2);
+  // Vercel sets x-vercel-ip-country itself; elsewhere cf-ipcountry is only real behind Cloudflare,
+  // so it's limited to a plain two-letter code.
+  const rawCountry = USE_VERCEL ? req.get('x-vercel-ip-country') : req.get('cf-ipcountry') || req.get('x-vercel-ip-country');
+  const country = /^[A-Z]{2}$/.test(String(rawCountry || '').toUpperCase()) ? String(rawCountry).toUpperCase() : '';
   const host = refHost(referrer, req.hostname);
   return store.visit(async ({ stats: s, getVisitor, setVisitor }) => {
     // Visitors are stored only as salted hashes; the salt lives with the stats.
@@ -79,7 +92,7 @@ export async function recordView(req, { referrer, cooldownMinutes }) {
     }
     if (last?.day !== today) s.daily[today].u += 1;
     setVisitor(visitor, { day: today, at: now });
-    if (host) inc(s.referrers, host);
+    if (host) incTop(s.referrers, host, 200);
     s.recent.unshift({ t: now, r: host || 'direct', d: device(ua), b: browser(ua), n: isNew, c: country || undefined });
     s.recent.length = Math.min(s.recent.length, 60);
     return { counted: true, isNew };

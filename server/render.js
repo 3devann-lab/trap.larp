@@ -55,7 +55,8 @@ export function renderProfile(cfg, { origin, views, discord, preview, authed }) 
     discord: discord || null,
     preview: Boolean(preview),
     authed: Boolean(authed),
-    dashboard: DASHBOARD_PATH,
+    // Only the signed-in owner gets the dashboard link; visitors mustn't learn a secret DASHBOARD_PATH.
+    dashboard: authed ? DASHBOARD_PATH : null,
     icons: neededIcons(cfg),
     effect: cfg.discord.effect === 'pick' ? findEffect(cfg.discord.effectId) : null,
   };
@@ -146,7 +147,7 @@ if (f) f.addEventListener('submit', async (e) => {
 </html>`;
 }
 
-export function renderDashboard({ ephemeral }) {
+export function renderDashboard({ ephemeral, weakPassword }) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -159,7 +160,7 @@ export function renderDashboard({ ephemeral }) {
 </head>
 <body>
 <div id="dash"></div>
-<script>window.__DASH__ = ${safeJson({ path: DASHBOARD_PATH, ephemeral })};</script>
+<script>window.__DASH__ = ${safeJson({ path: DASHBOARD_PATH, ephemeral, weakPassword })};</script>
 <script type="module" src="/static/dashboard/dashboard.js"></script>
 </body>
 </html>`;

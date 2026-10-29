@@ -563,7 +563,7 @@ export function merge(base, patch) {
   if (!isObj(base) || !isObj(patch)) return clone(patch === undefined ? base : patch);
   const out = clone(base);
   for (const [k, v] of Object.entries(patch)) {
-    if (v === undefined) continue;
+    if (v === undefined || k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
     out[k] = isObj(v) && isObj(out[k]) ? merge(out[k], v) : clone(v);
   }
   return out;
