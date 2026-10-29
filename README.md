@@ -29,7 +29,7 @@ It runs on [Railway](#deploy-on-railway) (the default), or for free on [Vercel w
 
 **Analytics**: view counter (unique or total, counted per IP address so reloading or clearing cookies can't pad it, compact format, count-up animation, carry over your old count), 30-day chart, referrers, link clicks, devices, browsers, recent visits.
 
-**Comments**: an optional comments section under your profile. Visitors leave one comment each (one per IP address), up to 200 characters, with a name, @username and an optional picture. You read and delete them in the dashboard.
+**Comments**: an optional comments section under your profile. Visitors leave one comment each (one per IP address), up to 200 characters, with a name, @username and an optional picture. You read and delete them in the dashboard, block words (even in fancy fonts or b4d spellings), and choose which @handles may post again.
 
 **Performance**: effects lighten themselves on weak phones and computers (particles at 30 fps with fewer of them, a softer card blur) and switch over automatically if the page starts to stutter. You can force full quality in Effects → Performance.
 
@@ -185,10 +185,12 @@ The transfer runs inside your own logged-in browser tab, so your guns.lol passwo
 
 Turn them on in Dashboard → **Comments**. They appear in their own card under your profile, and only load when a visitor scrolls to them.
 
-- **Who can post:** one comment per IP address. Different addresses on the same home IPv6 network count as one. Deleting a comment doesn't free that address up again, so someone you deleted can't just post again.
+- **Who can post:** one comment per IP address. Different addresses on the same home IPv6 network count as one. Deleting a comment doesn't free that address up again, so someone you deleted can't just post again. Each @handle is also locked once it has posted, so nobody else can comment under it. Look-alikes count as the same handle: @MIA, @m1a and @mia_ are all @mia.
 - **What they can post:** a display name (up to 32 characters), an @username (2–24 letters, numbers, `_` or `.`), a message of up to 200 characters, and optionally a picture. Pictures must be PNG, JPEG or WebP and at most 3 MB; GIFs, videos and animated images are refused. The visitor's browser shrinks the picture to 256 × 256 before sending, which also strips hidden data like a photo's location. Nobody can use your own name or @handle.
 - **Protection:** the server checks every picture's actual contents, not just its name, and refuses huge dimensions. Messages are cleaned of invisible and direction-flipping characters and always shown as plain text, so HTML or scripts in them never run. Each IP gets 5 tries to post every 10 minutes and 30 list loads a minute. The whole site takes at most 60 new comments an hour, in case many addresses flood it at once. A signed form token, a hidden trap field for bots and an origin check stop scripted and cross-site posting.
+- **Blocked words:** list words or phrases in Dashboard → **Comments** → **Blocked words**, one per line. A comment is refused if its message, display name or @handle contains one. Matching ignores capitals, accents and fancy fonts (𝓫𝓪𝓭, 𝐁𝐀𝐃, ʙᴀᴅ, ⓑⓐⓓ), and catches look-alike letters from other alphabets, number and symbol swaps (b4d, $), letters split by dots, spaces or emoji (b.a.d, b a d, b🔥a🔥d), and the word hidden inside another word. That last part means blocking "ass" also blocks "class", so choose words that don't appear inside common ones. Emoji can be blocked too. The list is never sent to visitors.
 - **Moderation:** Dashboard → **Comments** lists every comment with a **Delete** button.
+- **Letting someone post again:** click **Let them post again** on their comment, or type their handle under **Handle locks** and click **Unlock**. That handle can then post one more comment, even from an address that already commented, and it locks again right after. Handles aren't passwords, so whoever types an unlocked handle first gets that comment. Only unlock one when its owner is about to post, and use **Lock** if you change your mind.
 
 ## Discord setup
 
@@ -227,6 +229,6 @@ USEVERCEL=true GOOGLEFIREBASECONFIG='{"apiKey":"...","projectId":"..."}' FIREBAS
 
 ## Where data lives
 
-**Railway / local**: `DATA_DIR` (the volume on Railway) contains `config.json` (all settings), `stats.json` (analytics; visitors are stored only as salted hashes), `uploads/` (your media), `media.json` (original file names), `backups/` (14 days of daily snapshots), `comments.json` (comments, and the salted hashes of IPs that have commented), `avatars/` (commenters' pictures) and `secret.key` (a random key for signing logins; keep it private).
+**Railway / local**: `DATA_DIR` (the volume on Railway) contains `config.json` (all settings), `stats.json` (analytics; visitors are stored only as salted hashes), `uploads/` (your media), `media.json` (original file names), `backups/` (14 days of daily snapshots), `comments.json` (comments, the salted hashes of IPs that have commented, and which @handles are locked), `avatars/` (commenters' pictures) and `secret.key` (a random key for signing logins; keep it private).
 
-**Vercel**: the same things live in Firestore. `site/config` and `site/stats` hold settings and analytics, `visitors` holds the salted visitor hashes, `files` holds your media (each file split into 960 KB pieces), `uploading` tracks uploads in progress, `snapshots` holds 14 days of daily snapshots, `logins` tracks failed sign-in attempts, `comments` and `avatars` hold comments and their pictures, `commentIps` holds the salted hashes of IPs that have commented, `limits` holds the rate-limit counters, and `site/secret` holds a random key for signing logins.
+**Vercel**: the same things live in Firestore. `site/config` and `site/stats` hold settings and analytics, `visitors` holds the salted visitor hashes, `files` holds your media (each file split into 960 KB pieces), `uploading` tracks uploads in progress, `snapshots` holds 14 days of daily snapshots, `logins` tracks failed sign-in attempts, `comments` and `avatars` hold comments and their pictures, `commentIps` holds the salted hashes of IPs that have commented, `commentHandles` holds which @handles are locked, `limits` holds the rate-limit counters, and `site/secret` holds a random key for signing logins.

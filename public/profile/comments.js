@@ -106,7 +106,6 @@ function form(state, onPosted) {
       onPosted(posted);
     } catch (error) {
       fail(error.message);
-      if (error.status === 409) onPosted(null);
     } finally {
       submit.disabled = false;
     }
@@ -126,12 +125,19 @@ export function commentsBlock(cfg) {
   const state = { token: '', last: 0 };
 
   const done = (text) => slot.replaceChildren(h('p', { class: 'cm-note muted' }, text));
-  const showForm = () => slot.replaceChildren(h('button', { type: 'button', class: 'cm-btn', onclick: () => {
-    slot.replaceChildren(form(state, (posted) => {
-      if (posted) { list.prepend(item(posted)); empty.hidden = true; done('Thanks! Your comment is up.'); } else done('You already left a comment here.');
+  const openForm = () => {
+    slot.replaceChildren(form(state, (c) => {
+      list.prepend(item(c));
+      empty.hidden = true;
+      done('Thanks! Your comment is up.');
     }));
     slot.querySelector('input')?.focus();
-  } }, 'Leave a comment'));
+  };
+  const showForm = () => slot.replaceChildren(h('button', { type: 'button', class: 'cm-btn', onclick: openForm }, 'Leave a comment'));
+  // One comment per visitor, unless the owner unlocked their @handle for another one.
+  const alreadyPosted = () => slot.replaceChildren(h('p', { class: 'cm-note muted' }, 'You already left a comment here. ',
+    h('button', { type: 'button', class: 'cm-link', onclick: openForm }, 'Post again'),
+    ' (only works if the owner unlocked your @handle)'));
 
   const load = async (before) => {
     more.disabled = true;
@@ -142,7 +148,7 @@ export function commentsBlock(cfg) {
       state.last = data.comments.at(-1)?.at || state.last;
       more.hidden = !data.more;
       empty.hidden = list.children.length > 0;
-      if (!before) { if (data.canPost) showForm(); else done('You already left a comment here.'); }
+      if (!before) { if (data.canPost) showForm(); else alreadyPosted(); }
     } catch (error) {
       if (!before) slot.replaceChildren(h('p', { class: 'cm-note muted' }, error.message));
     } finally {

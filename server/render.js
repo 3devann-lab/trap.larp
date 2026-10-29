@@ -49,8 +49,10 @@ export function renderProfile(cfg, { origin, views, discord, preview, authed }) 
   const fonts = [...new Set([cfg.look.font, cfg.name.font, cfg.splash.font].filter(Boolean))].map(fontHref).filter(Boolean);
   const pageUrl = origin + '/';
 
+  // Blocked comment words stay on the server; visitors shouldn't see (or learn to dodge) them.
+  const { blocked, ...comments } = cfg.comments;
   const boot = {
-    config: cfg,
+    config: { ...cfg, comments },
     views,
     discord: discord || null,
     preview: Boolean(preview),

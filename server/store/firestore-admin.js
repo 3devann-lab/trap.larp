@@ -30,9 +30,11 @@ export function adminAdapter(key) {
       }));
     },
 
-    // Newest first by `orderBy`; `before` continues after that value, `limit` caps the page.
-    async list(collection, { orderBy, limit, before } = {}) {
+    // Newest first by `orderBy`; `before` continues after that value, `limit` caps the page,
+    // `where` is a [field, value] equality filter.
+    async list(collection, { orderBy, limit, before, where } = {}) {
       let query = db.collection(collection);
+      if (where) query = query.where(where[0], '==', where[1]);
       if (orderBy) query = query.orderBy(orderBy, 'desc');
       if (orderBy && before !== undefined) query = query.startAfter(before);
       if (limit) query = query.limit(limit);

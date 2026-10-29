@@ -355,32 +355,80 @@ export function comments() {
   const list = h('div', { class: 'cm-admin' });
   const more = h('button', { type: 'button', class: 'btn small ghost', hidden: true }, 'Show older');
   let last = 0;
+  // Handles the owner unlocked that haven't posted yet, by key (@MIA and @m1a share one key).
+  const unlocked = new Map();
+  const rows = new Set();
+
+  const setLock = async (handle, locked) => {
+    try {
+      const rec = await api('POST', '/comments/handles', { handle, locked });
+      if (locked) unlocked.delete(rec.key);
+      else unlocked.set(rec.key, { key: rec.key, handle: rec.handle });
+      refresh();
+      toast(locked ? `@${rec.handle} is locked` : `@${rec.handle} can post one more comment`);
+    } catch (err) { toast(err.message); }
+  };
+
+  const waiting = h('div', { class: 'cm-handles' });
+  const handleInput = h('input', { class: 'input', placeholder: '@handle', maxlength: 25, autocomplete: 'off', spellcheck: 'false' });
+  const unlockForm = h('form', { class: 'cm-unlock', onsubmit: async (e) => {
+    e.preventDefault();
+    if (!handleInput.value.trim()) return;
+    await setLock(handleInput.value.trim(), false);
+    handleInput.value = '';
+  } }, handleInput, h('button', { type: 'submit', class: 'btn small' }, icon('lu:lock-open'), 'Unlock'));
+
+  const refresh = () => {
+    waiting.replaceChildren(...[...unlocked.values()].map((u) => h('span', { class: 'cm-handle' },
+      `@${u.handle}`,
+      h('button', { type: 'button', class: 'btn small ghost', title: 'Lock it again', onclick: () => setLock(u.handle, true) }, icon('lu:lock'), 'Lock'))));
+    if (!unlocked.size) waiting.append(h('span', { class: 'muted small' }, 'No handles are unlocked right now.'));
+    for (const r of rows) r.update();
+  };
+
   const row = (c) => {
+    const lockBtn = h('button', { type: 'button', class: 'btn small' });
+    const status = h('span', { class: 'cm-badge', hidden: true }, 'can post again');
     const el = h('div', { class: 'cm-admin-row' },
       c.avatar ? h('img', { class: 'cm-admin-av', src: c.avatar, alt: '', loading: 'lazy' }) : h('span', { class: 'cm-admin-av' }, [...c.name][0]?.toUpperCase() || '?'),
       h('div', { class: 'cm-admin-body' },
-        h('div', {}, h('b', {}, c.name), ' ', h('span', { class: 'muted' }, `@${c.username} · ${new Date(c.at).toLocaleString()}`)),
+        h('div', {}, h('b', {}, c.name), ' ', h('span', { class: 'muted' }, `@${c.username} · ${new Date(c.at).toLocaleString()}`), ' ', status),
         h('div', { class: 'cm-admin-text' }, c.text)),
-      h('button', { type: 'button', class: 'btn small danger', onclick: async () => {
-        if (!await confirmBox('Delete this comment?', 'It disappears from your page. Its author still can\'t post another one from the same connection.', 'Delete', true)) return;
-        try {
-          await api('DELETE', `/comments/${encodeURIComponent(c.id)}`);
-          el.remove();
-          if (!list.children.length) list.append(h('p', { class: 'muted small' }, 'No comments yet.'));
-          toast('Comment deleted');
-        } catch (err) { toast(err.message); }
-      } }, icon('lu:trash-2'), 'Delete'));
+      h('div', { class: 'cm-admin-actions' },
+        lockBtn,
+        h('button', { type: 'button', class: 'btn small danger', onclick: async () => {
+          if (!await confirmBox('Delete this comment?', 'It disappears from your page. Its author still can\'t post another one from the same connection, and the handle stays locked until you unlock it.', 'Delete', true)) return;
+          try {
+            await api('DELETE', `/comments/${encodeURIComponent(c.id)}`);
+            el.remove();
+            rows.delete(el);
+            if (!list.children.length) list.append(h('p', { class: 'muted small' }, 'No comments yet.'));
+            toast('Comment deleted');
+          } catch (err) { toast(err.message); }
+        } }, icon('lu:trash-2'), 'Delete')));
+    el.update = () => {
+      const open = unlocked.has(c.key);
+      status.hidden = !open;
+      lockBtn.replaceChildren(icon(open ? 'lu:lock' : 'lu:lock-open'), open ? 'Lock again' : 'Let them post again');
+      lockBtn.title = open ? `Stop @${c.username} from posting again` : `Let @${c.username} post one more comment`;
+      lockBtn.onclick = () => setLock(c.username, open);
+    };
+    el.update();
+    rows.add(el);
     return el;
   };
   const load = async (before) => {
     more.disabled = true;
     try {
       const data = await api('GET', `/comments${before ? `?before=${before}` : ''}`);
-      if (!before) list.replaceChildren();
+      unlocked.clear();
+      for (const u of data.unlocked || []) unlocked.set(u.key, u);
+      if (!before) { list.replaceChildren(); rows.clear(); }
       list.append(...data.comments.map(row));
       if (!list.children.length) list.append(h('p', { class: 'muted small' }, 'No comments yet.'));
       last = data.comments.at(-1)?.at || last;
       more.hidden = !data.more;
+      refresh();
     } catch (err) {
       list.replaceChildren(h('p', { class: 'muted small' }, err.message));
     } finally {
@@ -389,5 +437,9 @@ export function comments() {
   };
   more.addEventListener('click', () => load(last));
   load();
-  return h('div', { class: 'panel' }, h('h4', {}, 'Comments on your page'), list, more);
+  return h('div', {},
+    h('div', { class: 'panel' }, h('h4', {}, 'Handle locks'),
+      h('p', { class: 'muted small' }, 'Each @handle can post once, then it\'s locked so nobody else can use it (look-alikes such as @MIA, @m1a and @mia_ count as the same handle). Unlock a handle to let it post one more comment, even from a connection that already commented. It locks again right after. Handles aren\'t passwords: whoever types an unlocked handle first gets that comment, so only unlock one when its owner is about to post.'),
+      unlockForm, waiting),
+    h('div', { class: 'panel' }, h('h4', {}, 'Comments on your page'), list, more));
 }

@@ -6,6 +6,7 @@ import { store } from './store/index.js';
 import { ipKey } from './analytics.js';
 import { sign, isAuthed } from './auth.js';
 import { allow } from './limits.js';
+import { wordMatcher, handleKey } from './textfold.js';
 
 export const MAX_TEXT = 200;
 export const MAX_AVATAR_BYTES = 3 * 1024 * 1024;
@@ -57,6 +58,14 @@ function clean(value) {
     .trim();
 }
 const length = (s) => [...s].length;
+
+// The owner's blocked words (Dashboard → Comments), rebuilt only when the list changes.
+let blockedFor = { list: null, test: () => false };
+function blocked(list) {
+  const key = JSON.stringify(list || []);
+  if (blockedFor.list !== key) blockedFor = { list: key, test: wordMatcher(list) };
+  return blockedFor.test;
+}
 
 // ---------- pictures ----------
 // The type comes from the file's bytes, never its name. GIF, SVG, video and animated PNG/WebP
@@ -125,6 +134,9 @@ function tokenOk(token, ip) {
 const ipHash = async (ip) => crypto.createHash('sha256').update(`${await store.commentSalt()}|${ip}`).digest('base64url').slice(0, 24);
 const toPublic = (c) => ({ id: c.id, at: c.at, username: c.username, name: c.name, text: c.text, avatar: c.avatar ? `/api/comments/avatar/${c.avatar}` : null });
 
+const HANDLE_TAKEN = 'That handle has already been used. If it\'s yours, ask the owner of this page to unlock it.';
+const ALREADY_POSTED = 'You already left a comment here. You can post again only if the owner of this page unlocks your @handle.';
+
 // ---------- routes ----------
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const deny = (res, status, error, retryIn) => {
@@ -187,11 +199,18 @@ publicComments.post('/', wrap(async (req, res) => {
   const text = clean(body.text);
   if (!name || length(name) > 32) return deny(res, 400, 'Display name must be 1–32 characters.');
   if (!/^[A-Za-z0-9_.]{2,24}$/.test(username)) return deny(res, 400, 'Username must be 2–24 letters, numbers, _ or .');
+  const key = handleKey(username);
+  if (key.length < 2) return deny(res, 400, 'Username needs at least 2 letters or numbers.');
   if (!text) return deny(res, 400, 'Write a message first.');
   if (length(text) > MAX_TEXT) return deny(res, 400, `Messages can be at most ${MAX_TEXT} characters.`);
-  const { profile } = await store.getConfig();
-  const owner = [profile.username, profile.displayName].map((v) => String(v || '').trim().toLowerCase()).filter(Boolean);
-  if (owner.includes(username.toLowerCase()) || owner.includes(name.toLowerCase())) return deny(res, 400, 'That name belongs to the owner of this page.');
+  const { profile, comments: settings } = await store.getConfig();
+  // Look-alikes count too: "Tr4p" and "ᴛʀᴀᴘ" are the owner "trap".
+  const owner = [profile.username, profile.displayName].map(handleKey).filter((k) => k.length >= 2);
+  if (owner.includes(key) || owner.includes(handleKey(name))) return deny(res, 400, 'That name belongs to the owner of this page.');
+  // Which word matched isn't said, so it can't be used to work around the list.
+  const isBlocked = blocked(settings.blocked);
+  if (isBlocked(name) || isBlocked(username)) return deny(res, 400, 'That name includes a word that isn\'t allowed here.');
+  if (isBlocked(text)) return deny(res, 400, 'Your message includes a word that isn\'t allowed here.');
 
   let avatar = null;
   if (body.avatar) {
@@ -203,17 +222,22 @@ publicComments.post('/', wrap(async (req, res) => {
     avatar = { buf, type: img.type };
   }
 
+  // Each handle posts once and then stays locked until the owner unlocks it. An unlocked handle
+  // may post once more even from an IP that already commented.
   const hash = await ipHash(ip);
-  if (await hasCommented(hash)) return deny(res, 409, 'You already left a comment here.');
+  const handle = await store.getHandle(key);
+  if (handle?.locked) return deny(res, 409, HANDLE_TAKEN);
+  if (!handle && await hasCommented(hash)) return deny(res, 409, ALREADY_POSTED);
   const all = await store.hit('comment-post-all', 'all', ...LIMITS.postAll);
   if (!all.ok) return deny(res, 429, 'Lots of comments right now. Try again later.', all.retryIn);
 
   const id = crypto.randomBytes(9).toString('base64url');
   const comment = { id, at: Date.now(), username, name, text, avatar: avatar ? `${id}.${avatar.type}` : null };
   if (avatar) await store.putAvatar(comment.avatar, avatar.buf);
-  if (!(await store.addComment(comment, hash))) {
+  const saved = await store.addComment(comment, hash, key);
+  if (saved !== 'ok') {
     if (avatar) await store.removeAvatar(comment.avatar);
-    return deny(res, 409, 'You already left a comment here.');
+    return deny(res, 409, saved === 'handle' ? HANDLE_TAKEN : ALREADY_POSTED);
   }
   commented.set(hash, { value: true, at: Date.now() });
   forget();
@@ -224,8 +248,20 @@ publicComments.post('/', wrap(async (req, res) => {
 export const adminComments = express.Router();
 
 adminComments.get('/', wrap(async (req, res) => {
-  const page = await store.listComments({ limit: 50, before: Number(req.query.before) || undefined });
-  res.json({ comments: page.comments.map(toPublic), more: page.more });
+  const [page, unlocked] = await Promise.all([store.listComments({ limit: 50, before: Number(req.query.before) || undefined }), store.listUnlockedHandles()]);
+  res.json({ comments: page.comments.map((c) => ({ ...toPublic(c), key: handleKey(c.username) })), more: page.more, unlocked });
+}));
+
+// Lock or unlock a handle. Unlocking lets it post one more comment, even from an IP that
+// already commented; it locks again as soon as it does.
+adminComments.post('/handles', wrap(async (req, res) => {
+  const handle = clean(req.body?.handle).replace(/^@/, '').slice(0, 24);
+  const key = handleKey(handle);
+  if (key.length < 2) return res.status(400).json({ error: 'Type a handle with at least 2 letters or numbers.' });
+  const rec = await store.getHandle(key);
+  const locked = Boolean(req.body?.locked);
+  await store.setHandle(key, { locked, handle: rec?.handle || handle, at: rec?.at || Date.now() });
+  res.json({ key, handle: rec?.handle || handle, locked });
 }));
 
 adminComments.delete('/:id', wrap(async (req, res) => {

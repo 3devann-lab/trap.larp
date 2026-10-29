@@ -486,6 +486,7 @@ body.calm *, body.calm *::before, body.calm *::after { animation-duration: 0s !i
 .cm-btn { font: inherit; font-size: .88em; font-weight: 600; color: #fff; background: var(--accent); border: 1px solid transparent; border-radius: 10px; padding: 7px 14px; cursor: pointer; }
 .cm-btn.ghost { background: transparent; color: var(--text); border-color: rgba(255, 255, 255, .16); }
 .cm-btn:disabled { opacity: .5; cursor: default; }
+.cm-link { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .cm-more { align-self: center; }
 .cm-error { margin: 0; font-size: .85em; color: #f87171; }
 .cm-trap { position: absolute; left: -10000px; width: 1px; height: 1px; opacity: 0; }

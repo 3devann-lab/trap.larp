@@ -10,6 +10,7 @@ import { FIREBASE_CONFIG, FIREBASE_EMAIL, FIREBASE_PASSWORD } from '../env.js';
 import { withDefaults } from '../../shared/schema.js';
 import { CHUNK_SIZE, PART_SIZE, fileInfo, typeOf, validName } from '../media.js';
 import { restAdapter } from './firestore-rest.js';
+import { handleKey } from '../textfold.js';
 
 // Responses to ranged requests (audio/video seeking) stop at 4 MB to stay under Vercel's
 // response limit; browsers ask for the rest as they need it.
@@ -91,6 +92,22 @@ export async function createStore() {
   };
   const configCache = ttlCache(async () => withDefaults(parse(await db.get('site/config'), {})));
   const statsCache = ttlCache(async () => readStats(await db.get('site/stats')));
+
+  // Handles used before handle locks existed get locked once; a flag in site/comments records it.
+  let handlesReady = null;
+  const ensureHandles = () => {
+    handlesReady ||= (async () => {
+      const meta = await db.get('site/comments');
+      if (meta?.handles) return;
+      const all = await db.list('comments');
+      await commitAll([
+        ...all.map(({ id, data }) => ({ id, data, key: handleKey(data.username) })).filter((c) => c.key.length >= 2)
+          .map(({ id, data, key }) => ({ set: `commentHandles/${key}`, data: { locked: true, at: data.at, id, handle: data.username } })),
+        { set: 'site/comments', data: { handles: true }, merge: true },
+      ]);
+    })().catch((err) => { handlesReady = null; throw err; });
+    return handlesReady;
+  };
 
   let prunedOn = '';
   let saltCache = null;
@@ -284,16 +301,34 @@ export async function createStore() {
 
     async hasCommented(ipHash) { return Boolean(await db.get(`commentIps/${ipHash}`)); },
 
-    // Saves the comment unless this IP already has one (kept after the comment is deleted, so
-    // its author can't simply post again); returns whether it was saved.
-    addComment(comment, ipHash) {
+    // Saves the comment and locks its handle, in one transaction. Returns 'handle' if the handle
+    // is locked, 'ip' if this IP already commented (unless the owner unlocked the handle; IPs stay
+    // used after a comment is deleted), otherwise 'ok'.
+    async addComment(comment, ipHash, key) {
+      await ensureHandles();
       const { id, ...data } = comment;
       return db.transaction(async (t) => {
-        if (await t.get(`commentIps/${ipHash}`)) return false;
+        const rec = await t.get(`commentHandles/${key}`);
+        if (rec?.locked) return 'handle';
+        if (!rec && await t.get(`commentIps/${ipHash}`)) return 'ip';
         t.set(`commentIps/${ipHash}`, { at: comment.at, id });
+        t.set(`commentHandles/${key}`, { locked: true, at: comment.at, id, handle: comment.username });
         t.set(`comments/${id}`, data);
-        return true;
+        return 'ok';
       });
+    },
+
+    async getHandle(key) {
+      await ensureHandles();
+      return db.get(`commentHandles/${key}`);
+    },
+    async setHandle(key, rec) {
+      await ensureHandles();
+      await db.commit([{ set: `commentHandles/${key}`, data: rec, merge: true }]);
+    },
+    async listUnlockedHandles() {
+      await ensureHandles();
+      return (await db.list('commentHandles', { where: ['locked', false] })).map(({ id, data }) => ({ key: id, handle: data.handle, at: data.at }));
     },
 
     async listComments({ limit, before }) {

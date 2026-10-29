@@ -6,6 +6,7 @@ import express from 'express';
 import { DATA_DIR, UPLOAD_DIR } from '../env.js';
 import { withDefaults } from '../../shared/schema.js';
 import { PART_SIZE, fileInfo } from '../media.js';
+import { handleKey } from '../textfold.js';
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const STATS_FILE = path.join(DATA_DIR, 'stats.json');
@@ -50,8 +51,13 @@ export function createStore() {
   const logins = new Map();
   // Comments, newest first, plus the hashed IPs that have already commented (kept after a
   // comment is deleted, so its author can't simply post again).
-  const comments = { salt: '', list: [], ips: {}, ...readJson(COMMENTS_FILE, {}) };
+  const comments = { salt: '', list: [], ips: {}, handles: {}, ...readJson(COMMENTS_FILE, {}) };
   const saveComments = () => writeJsonAtomic(COMMENTS_FILE, comments);
+  // Handles used before handle locks existed are locked too.
+  for (const c of comments.list) {
+    const key = handleKey(c.username);
+    if (key.length >= 2) comments.handles[key] ||= { locked: true, at: c.at, id: c.id, handle: c.username };
+  }
   const limits = new Map();
 
   function flushStats() {
@@ -236,13 +242,26 @@ export function createStore() {
 
     async hasCommented(ipHash) { return Boolean(comments.ips[ipHash]); },
 
-    // Saves the comment unless this IP already has one; returns whether it was saved.
-    async addComment(comment, ipHash) {
-      if (comments.ips[ipHash]) return false;
+    // Saves the comment and locks its handle. Returns 'handle' if the handle is locked, 'ip' if
+    // this IP already commented (unless the owner unlocked the handle), otherwise 'ok'.
+    async addComment(comment, ipHash, key) {
+      const rec = comments.handles[key];
+      if (rec?.locked) return 'handle';
+      if (!rec && comments.ips[ipHash]) return 'ip';
       comments.ips[ipHash] = comment.at;
+      comments.handles[key] = { locked: true, at: comment.at, id: comment.id, handle: comment.username };
       comments.list.unshift(comment);
       saveComments();
-      return true;
+      return 'ok';
+    },
+
+    async getHandle(key) { return comments.handles[key] || null; },
+    async setHandle(key, rec) {
+      comments.handles[key] = { ...comments.handles[key], ...rec };
+      saveComments();
+    },
+    async listUnlockedHandles() {
+      return Object.entries(comments.handles).filter(([, r]) => !r.locked).map(([key, r]) => ({ key, handle: r.handle, at: r.at }));
     },
 
     async listComments({ limit, before }) {
