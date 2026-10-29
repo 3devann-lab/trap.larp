@@ -1,6 +1,7 @@
 // Disk storage (Railway, local): JSON files and uploads under DATA_DIR.
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import express from 'express';
 import { DATA_DIR, UPLOAD_DIR } from '../env.js';
 import { withDefaults } from '../../shared/schema.js';
@@ -10,6 +11,8 @@ const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const STATS_FILE = path.join(DATA_DIR, 'stats.json');
 const META_FILE = path.join(DATA_DIR, 'media.json');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
+const COMMENTS_FILE = path.join(DATA_DIR, 'comments.json');
+const AVATAR_DIR = path.join(DATA_DIR, 'avatars');
 
 function readJson(file, fallback) {
   try {
@@ -35,6 +38,7 @@ const partialPath = (name) => path.join(UPLOAD_DIR, `.partial-${path.basename(na
 export function createStore() {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
   fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  fs.mkdirSync(AVATAR_DIR, { recursive: true });
 
   let config = withDefaults(readJson(CONFIG_FILE, {}));
   let stats = { ...emptyStats(), ...readJson(STATS_FILE, {}) };
@@ -43,6 +47,11 @@ export function createStore() {
   // entries can be dropped from the front; no cooldown option is longer than a day.
   const lastCounted = new Map();
   const logins = new Map();
+  // Comments, newest first, plus the hashed IPs that have already commented (kept after a
+  // comment is deleted, so its author can't simply post again).
+  const comments = { salt: '', list: [], ips: {}, ...readJson(COMMENTS_FILE, {}) };
+  const saveComments = () => writeJsonAtomic(COMMENTS_FILE, comments);
+  const limits = new Map();
 
   function flushStats() {
     if (!statsDirty) return;
@@ -200,5 +209,54 @@ export function createStore() {
     },
 
     serveUploads: express.static(UPLOAD_DIR, { maxAge: '30d', immutable: true, dotfiles: 'ignore' }),
+
+    // ---------- comments ----------
+    async commentSalt() {
+      if (!comments.salt) {
+        comments.salt = crypto.randomBytes(16).toString('hex');
+        saveComments();
+      }
+      return comments.salt;
+    },
+
+    async hasCommented(ipHash) { return Boolean(comments.ips[ipHash]); },
+
+    // Saves the comment unless this IP already has one; returns whether it was saved.
+    async addComment(comment, ipHash) {
+      if (comments.ips[ipHash]) return false;
+      comments.ips[ipHash] = comment.at;
+      comments.list.unshift(comment);
+      saveComments();
+      return true;
+    },
+
+    async listComments({ limit, before }) {
+      const older = before ? comments.list.filter((c) => c.at < before) : comments.list;
+      return { comments: older.slice(0, limit), more: older.length > limit };
+    },
+
+    async removeComment(id) {
+      const i = comments.list.findIndex((c) => c.id === id);
+      if (i < 0) return null;
+      const [removed] = comments.list.splice(i, 1);
+      saveComments();
+      return removed;
+    },
+
+    async putAvatar(name, buf) { await fs.promises.writeFile(path.join(AVATAR_DIR, path.basename(name)), buf); },
+    async getAvatar(name) { return fs.promises.readFile(path.join(AVATAR_DIR, path.basename(name))).catch(() => null); },
+    async removeAvatar(name) { await fs.promises.rm(path.join(AVATAR_DIR, path.basename(name)), { force: true }); },
+
+    // Fixed-window counter: at most `max` hits per `windowMs` for this bucket and key.
+    async hit(bucket, key, windowMs, max) {
+      const id = `${bucket}|${key}`;
+      const now = Date.now();
+      let rec = limits.get(id);
+      if (!rec || now - rec.start >= windowMs) rec = { start: now, n: 0 };
+      rec.n += 1;
+      limits.set(id, rec);
+      if (limits.size > 20000) for (const [k, r] of limits) if (now - r.start > 864e5) limits.delete(k);
+      return { ok: rec.n <= max, retryIn: Math.ceil((rec.start + windowMs - now) / 1000) };
+    },
   };
 }

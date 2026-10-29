@@ -8,6 +8,8 @@ const secret = crypto.createHash('sha256').update(`trap.larp|${SESSION_SECRET}|$
 
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
 const hmac = (data) => crypto.createHmac('sha256', secret).update(data).digest('base64url');
+// Signs short values (like comment form tokens) with the same server secret as logins.
+export const sign = hmac;
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest();
 
 export function parseCookies(req) {

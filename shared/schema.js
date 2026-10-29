@@ -233,6 +233,11 @@ export const SECTIONS = [
           { key: 'fx.clickColor', type: 'color', label: 'Click color', default: '#a855f7', show: (c) => !['none', 'emoji'].includes(c.fx.click) },
         ],
       },
+      {
+        title: 'Performance', fields: [
+          { key: 'fx.quality', type: 'select', label: 'On slow phones and computers', default: 'auto', options: opts(['auto', 'Lighten effects automatically'], ['full', 'Always full quality']), help: 'Lighter effects: particles at 30 fps with fewer of them, and a softer card blur. Used on low-memory devices and whenever the page starts to stutter.' },
+        ],
+      },
     ],
   },
   {
@@ -485,6 +490,16 @@ export const SECTIONS = [
           { key: 'page.noSelect', type: 'toggle', label: 'Disable text selection', default: false },
           { key: 'page.reduceMotion', type: 'toggle', label: 'Respect visitors\' reduced-motion setting', default: true },
           { key: 'page.footer', type: 'text', label: 'Footer text', default: '' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'comments', label: 'Comments', icon: 'lu:message-square', custom: 'comments', groups: [
+      {
+        title: 'Comments', desc: 'Visitors can leave one comment each (one per IP address), up to 200 characters, with an optional PNG, JPEG or WebP picture up to 3 MB.', fields: [
+          { key: 'comments.enabled', type: 'toggle', label: 'Show a comments section on my page', default: false },
+          { key: 'comments.title', type: 'text', label: 'Section title', default: 'Comments', show: (c) => c.comments.enabled },
         ],
       },
     ],

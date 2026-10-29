@@ -13,6 +13,7 @@ import { isAuthed, login, clearSession, requireAuth } from './auth.js';
 import { recordView, recordClick, viewCount, statsSummary } from './analytics.js';
 import { getProfile, getInvite, inviteCode, getAppIcon, effectCatalog, findEffect, checkLanyard, isSnowflake } from './discord.js';
 import { normalizeGuns, localizeMedia, downloadToLibrary } from './importer.js';
+import { publicComments, adminComments } from './comments.js';
 import { PART_SIZE, newName, validName } from './media.js';
 import { iconSet, allIconRefs } from './icons.js';
 import { renderProfile, renderLogin, renderDashboard } from './render.js';
@@ -107,6 +108,8 @@ app.post('/api/click', wrap(async (req, res) => {
   if (known && !(isAuthed(req) && !cfg.views.countOwner)) await recordClick(id);
   res.status(204).end();
 }));
+
+app.use('/api/comments', publicComments);
 
 app.get('/api/icons', (req, res) => {
   const refs = String(req.query.refs || '').split(',').filter((r) => /^(si|lu):[a-z0-9-]+$/.test(r)).slice(0, 300);
@@ -287,6 +290,8 @@ admin.post('/import/guns/apply', wrap(async (req, res) => {
   const config = await store.setConfig(merge(await store.getConfig(), chosen));
   res.json({ config, downloads });
 }));
+
+admin.use('/comments', adminComments);
 
 app.use('/api/admin', admin);
 

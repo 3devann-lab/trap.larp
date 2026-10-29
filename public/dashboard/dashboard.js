@@ -1,7 +1,7 @@
 import { h, icon, addIcons, toast } from '/static/profile/util.js';
 import { SECTIONS, getPath, setPath, withDefaults } from '/shared/schema.js';
 import { api, renderField } from './fields.js';
-import { overview, themes, media, importer } from './sections.js';
+import { overview, themes, media, importer, comments } from './sections.js';
 
 const DASH = window.__DASH__ || {};
 const store = {
@@ -157,14 +157,17 @@ function showSection(id, { keepScroll = false } = {}) {
   else if (section.custom === 'themes') body = themes(ctx);
   else if (section.custom === 'media') body = media(ctx);
   else if (section.custom === 'import') body = importer(ctx);
-  else {
-    body = h('div', { class: 'groups' }, section.groups.map((g) => h('div', { class: 'panel' },
-      h('h4', {}, g.title), g.desc ? h('p', { class: 'muted small' }, g.desc) : null,
-      h('div', { class: 'fields' }, g.fields.map((f) => renderField(f, { get: () => getPath(ctx.cfg, f.key), set: (v) => ctx.set(f.key, v) }, ctx))))));
-  }
+  else if (section.custom === 'comments') body = h('div', {}, groupsBody(section), comments());
+  else body = groupsBody(section);
   content.replaceChildren(body);
   ctx.rows = [...content.querySelectorAll('.field')];
   content.scrollTop = scroll;
+}
+
+function groupsBody(section) {
+  return h('div', { class: 'groups' }, section.groups.map((g) => h('div', { class: 'panel' },
+    h('h4', {}, g.title), g.desc ? h('p', { class: 'muted small' }, g.desc) : null,
+    h('div', { class: 'fields' }, g.fields.map((f) => renderField(f, { get: () => getPath(ctx.cfg, f.key), set: (v) => ctx.set(f.key, v) }, ctx))))));
 }
 
 function overviewPlaceholder() {
