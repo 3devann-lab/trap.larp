@@ -209,8 +209,8 @@ publicComments.post('/', wrap(async (req, res) => {
   if (owner.includes(key) || owner.includes(handleKey(name))) return deny(res, 400, 'That name belongs to the owner of this page.');
   // Which word matched isn't said, so it can't be used to work around the list.
   const isBlocked = blocked(settings.blocked);
-  if (isBlocked(name) || isBlocked(username)) return deny(res, 400, 'That name includes a word that isn\'t allowed here.');
-  if (isBlocked(text)) return deny(res, 400, 'Your message includes a word that isn\'t allowed here.');
+  if (isBlocked(name) || isBlocked(username)) return deny(res, 400, 'Error while parsing this name.');
+  if (isBlocked(text)) return deny(res, 400, 'An error occured while attempting to post this comment.');
 
   let avatar = null;
   if (body.avatar) {
