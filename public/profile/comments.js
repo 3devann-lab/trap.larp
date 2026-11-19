@@ -26,7 +26,7 @@ async function api(path, opts) {
 function item(c) {
   const letter = h('span', { class: 'cm-av cm-av-letter', 'aria-hidden': 'true' }, [...c.name][0]?.toUpperCase() || '?');
   let av = letter;
-  if (c.avatar && /^\/api\/comments\/avatar\/[\w-]{12}\.(png|jpg|webp)$/.test(c.avatar)) {
+  if (c.avatar && /^\/api\/comments\/avatar\/[\w-]{16}\/[\w-]{12}\.(png|jpg|webp)$/.test(c.avatar)) {
     av = h('img', { class: 'cm-av', src: c.avatar, alt: '', width: 36, height: 36, loading: 'lazy', decoding: 'async' });
     av.onerror = () => av.replaceWith(letter);
   }
