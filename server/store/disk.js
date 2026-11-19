@@ -48,7 +48,6 @@ export function createStore() {
   // When each visitor was last counted. Kept in insertion order (oldest first) so expired
   // entries can be dropped from the front; no cooldown option is longer than a day.
   const lastCounted = new Map();
-  const logins = new Map();
   // Comments, newest first, plus the hashed IPs that have already commented (kept after a
   // comment is deleted, so its author can't simply post again).
   const comments = { salt: '', list: [], ips: {}, handles: {}, ...readJson(COMMENTS_FILE, {}) };
@@ -106,6 +105,13 @@ export function createStore() {
           fs.writeFileSync(SECRET_FILE, secret, { mode: 0o600 });
         }
       }
+      return secret;
+    },
+
+    // A new key signs everyone out ("Sign out everywhere").
+    async rotateSecret() {
+      secret = crypto.randomBytes(32).toString('hex');
+      fs.writeFileSync(SECRET_FILE, secret, { mode: 0o600 });
       return secret;
     },
 
@@ -173,13 +179,6 @@ export function createStore() {
       const result = await fn(tx);
       if (result.counted) statsDirty = true;
       return { ...result, stats };
-    },
-
-    async getLogin(key) { return logins.get(key) || null; },
-    async setLogin(key, rec) {
-      if (rec) logins.set(key, rec);
-      else logins.delete(key);
-      if (logins.size > 5000) for (const [k, r] of logins) if (Date.now() - r.first > 864e5) logins.delete(k);
     },
 
     // ---------- media ----------

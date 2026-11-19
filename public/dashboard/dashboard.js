@@ -1,6 +1,6 @@
 import { h, icon, addIcons, toast } from '/static/profile/util.js';
 import { SECTIONS, getPath, setPath, withDefaults } from '/shared/schema.js';
-import { api, renderField } from './fields.js';
+import { api, renderField, confirmBox } from './fields.js';
 import { overview, themes, media, importer, comments } from './sections.js';
 
 const DASH = window.__DASH__ || {};
@@ -76,7 +76,14 @@ const shell = h('div', { class: 'shell' + (previewOpen ? ' with-preview' : '') }
     search, nav,
     h('div', { class: 'side-foot' },
       h('a', { class: 'side-link', href: '/', target: '_blank' }, icon('lu:external-link'), 'View my page'),
-      h('button', { type: 'button', class: 'side-link', onclick: async () => { await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-trap': '1' } }); location.reload(); } }, icon('lu:log-out'), 'Sign out'))),
+      h('button', { type: 'button', class: 'side-link', onclick: async () => { await fetch('/api/auth/logout', { method: 'POST', headers: { 'x-trap': '1' } }); location.reload(); } }, icon('lu:log-out'), 'Sign out'),
+      h('button', { type: 'button', class: 'side-link', onclick: async () => {
+        if (!await confirmBox('Sign out everywhere?', 'Every device signed in to this dashboard is signed out, this one included. Use it if you signed in on a device you don\'t trust anymore or think someone else got in. It reaches every server within about a minute.', 'Sign out everywhere', true)) return;
+        try {
+          await api('POST', '/sessions/revoke');
+          location.reload();
+        } catch (err) { toast(err.message); }
+      } }, icon('lu:shield-check'), 'Sign out everywhere'))),
   h('main', { class: 'main' },
     h('header', { class: 'top' },
       h('button', { type: 'button', class: 'icon-btn menu-btn', 'aria-label': 'menu', onclick: () => shell.classList.toggle('nav-open') }, icon('lu:menu')),

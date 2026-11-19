@@ -10,13 +10,30 @@ const COOKIE = 'tl_session';
 // offline. Changing DASHBOARD_PASSWORD or SESSION_SECRET still signs everyone out.
 let secret = null;
 let ready = null;
+let loadedAt = 0;
+let refreshing = null;
+const derive = (s) => crypto.createHash('sha256').update(`trap.larp|${s}|${SESSION_SECRET}|${DASHBOARD_PASSWORD}`).digest();
+// Bumped on every rotation, so a read that started before one can't put the old key back.
+let generation = 0;
+const load = (fresh) => {
+  const gen = generation;
+  return store.serverSecret({ fresh }).then((s) => {
+    if (gen !== generation) return;
+    secret = derive(s);
+    loadedAt = Date.now();
+  });
+};
+// How often each server re-reads the key, so "Sign out everywhere" reaches all of Vercel's servers.
+const REFRESH_MS = 60e3;
+
 export function authReady() {
-  ready ||= store.serverSecret().then((s) => {
-    secret = crypto.createHash('sha256').update(`trap.larp|${s}|${SESSION_SECRET}|${DASHBOARD_PASSWORD}`).digest();
-  }).catch((err) => {
+  ready ||= load(false).catch((err) => {
     ready = null;
     throw err;
   });
+  if (secret && !refreshing && Date.now() - loadedAt > REFRESH_MS) {
+    refreshing = load(true).catch(() => {}).finally(() => { refreshing = null; });
+  }
   return ready;
 }
 
@@ -66,30 +83,38 @@ export function clearSession(req, res) {
   res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${req.secure ? '; Secure' : ''}`);
 }
 
-// Brute-force protection: 8 failures per 15 minutes per IP, kept in the store so it holds
-// across Vercel's short-lived servers too.
+// Brute-force protection: 8 attempts per 15 minutes per IP (IPv6 counted per /64, so hopping
+// between addresses doesn't reset the count), and 100 per 15 minutes for the whole site, against
+// guesses spread over many addresses. Both counters live in the store and are updated atomically,
+// so parallel guesses can't slip past them, and they hold across Vercel's short-lived servers too.
 const WINDOW = 15 * 60 * 1000;
+const PER_IP = 8;
+const SITE_WIDE = 100;
+const minutes = (seconds) => Math.max(1, Math.ceil(seconds / 60));
 
 export async function login(req, res) {
   if (!DASHBOARD_PASSWORD) {
     return res.status(503).json({ error: `DASHBOARD_PASSWORD is not set on the server. Add it in your ${USE_VERCEL ? 'Vercel' : 'Railway'} variables and redeploy.` });
   }
-  // Keyed by IP with IPv6 counted per /64, so hopping between addresses doesn't reset the count.
-  const ip = ipKey(req.ip) || 'unknown';
-  const now = Date.now();
-  let rec = await store.getLogin(ip);
-  if (!rec || now - rec.first > WINDOW) rec = { n: 0, first: now };
-  if (rec.n >= 8) {
-    const wait = Math.ceil((rec.first + WINDOW - now) / 60000);
-    return res.status(429).json({ error: `Too many attempts. Try again in ${wait} min.` });
-  }
+  const mine = await store.hit('login', ipKey(req.ip) || 'unknown', WINDOW, PER_IP);
+  if (!mine.ok) return res.status(429).json({ error: `Too many attempts. Try again in ${minutes(mine.retryIn)} min.` });
+  const all = await store.hit('login-all', 'all', WINDOW, SITE_WIDE);
+  if (!all.ok) return res.status(429).json({ error: `Too many sign-in attempts on this site right now. Try again in ${minutes(all.retryIn)} min.` });
   const given = sha(req.body?.password ?? '');
-  if (!crypto.timingSafeEqual(given, sha(DASHBOARD_PASSWORD))) {
-    await store.setLogin(ip, { n: rec.n + 1, first: rec.first });
-    return res.status(401).json({ error: 'Wrong password.' });
-  }
-  if (rec.n) await store.setLogin(ip, null);
+  if (!crypto.timingSafeEqual(given, sha(DASHBOARD_PASSWORD))) return res.status(401).json({ error: 'Wrong password.' });
+  // Sign with the newest key, in case "Sign out everywhere" was used on another server.
+  await load(true);
   setSession(req, res);
+  res.json({ ok: true });
+}
+
+// Replaces the signing key, so every login cookie (on every device) stops working. Other servers
+// pick the new key up within REFRESH_MS.
+export async function signOutEverywhere(req, res) {
+  generation += 1;
+  secret = derive(await store.rotateSecret());
+  loadedAt = Date.now();
+  clearSession(req, res);
   res.json({ ok: true });
 }
 

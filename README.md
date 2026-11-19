@@ -147,7 +147,7 @@ A custom domain goes in **Settings → Domains**.
 
 - **Vercel Hobby** is free for personal, non-commercial sites.
 - **Firestore (Spark plan)** gives you 1 GB of storage, 50,000 reads and 20,000 writes per day. A counted visit uses 5 to 7 reads (more with Discord widgets) and 2 writes, so a few thousand visitors a day fits comfortably. If you ever run out, the site shows an error until the quota resets at midnight Pacific time.
-- **Uploads** are stored inside Firestore, so they share that 1 GB. Files are capped at 25 MB each by default. Vercel's CDN keeps a copy of images and other whole files after the first view, so repeat visits don't touch Firestore. For music, YouTube links take no space at all.
+- **Uploads** are stored inside Firestore, so they share that 1 GB. Files are capped at 25 MB each by default. Vercel's CDN keeps a copy of images and other whole files after the first view, so repeat visits don't touch Firestore. For music, YouTube links take no space at all. To protect the free quota, visitors are only sent files your page actually uses (anything referenced in your settings, custom CSS and HTML included). Files that only sit in your media library open just for you while you're signed in.
 - **Comments** only cost anything when a visitor scrolls down to them: about 22 reads to show a page of 20 comments, and a handful of reads and writes to post one.
 - Firebase's separate file storage product (Cloud Storage) now requires a paid plan with a card, which is why trap.larp doesn't use it.
 
@@ -203,11 +203,13 @@ Live presence comes from [Lanyard](https://github.com/Phineas/lanyard). Bio, ban
 
 ## Security
 
-- **Use a long dashboard password.** At least 12 characters; a few random words works well. The dashboard warns you if it's shorter. Wrong passwords are limited to 8 every 15 minutes per IP address (IPv6 per /64 network).
+- **Use a long dashboard password.** At least 12 characters; a few random words works well. The dashboard warns you if it's shorter. Sign-in attempts are limited to 8 every 15 minutes per IP address (IPv6 per /64 network) and 100 every 15 minutes for the whole site, so guesses spread over many addresses are capped too. If someone floods the site-wide limit, new sign-ins wait until it resets, but a dashboard you're already signed in to keeps working.
 - **Hide the dashboard.** Set `DASHBOARD_PATH` to something hard to guess. The path isn't shown to visitors anywhere, including robots.txt and the page source.
+- **Sign out everywhere.** If you signed in on a device you no longer trust, or think someone else got in, click **Sign out everywhere** at the bottom of the dashboard menu. Every login on every device stops working (it reaches all of Vercel's servers within about a minute), and you sign in again with your password. **Sign out** on its own only signs out the browser you click it in.
 - **What's already handled:**
   - **Logins:** they're signed with a random key kept in your storage, so nothing visitors can see helps them guess your password.
-  - **Flood limits:** every public endpoint has a per-IP limit, so request floods are turned away before they cost database reads or writes.
+  - **Flood limits:** every public endpoint has a per-IP limit, so request floods are turned away before they cost database reads or writes. On Vercel, tricks that would make the server read Firestore again for the same file (extra `?...` on a file address, made-up file names, repeated view pings) are turned away without a read.
+  - **Error messages:** Firebase setup hints only appear on the dashboard and its sign-in; visitors just see "Server error."
   - **Pages:** they can't be framed by other sites.
   - **"Save to database":** it refuses private and internal network addresses.
   - **Comments:** see above.
@@ -231,4 +233,4 @@ USEVERCEL=true GOOGLEFIREBASECONFIG='{"apiKey":"...","projectId":"..."}' FIREBAS
 
 **Railway / local**: `DATA_DIR` (the volume on Railway) contains `config.json` (all settings), `stats.json` (analytics; visitors are stored only as salted hashes), `uploads/` (your media), `media.json` (original file names), `backups/` (14 days of daily snapshots), `comments.json` (comments, the salted hashes of IPs that have commented, and which @handles are locked), `avatars/` (commenters' pictures) and `secret.key` (a random key for signing logins; keep it private).
 
-**Vercel**: the same things live in Firestore. `site/config` and `site/stats` hold settings and analytics, `visitors` holds the salted visitor hashes, `files` holds your media (each file split into 960 KB pieces), `uploading` tracks uploads in progress, `snapshots` holds 14 days of daily snapshots, `logins` tracks failed sign-in attempts, `comments` and `avatars` hold comments and their pictures, `commentIps` holds the salted hashes of IPs that have commented, `commentHandles` holds which @handles are locked, `limits` holds the rate-limit counters, and `site/secret` holds a random key for signing logins.
+**Vercel**: the same things live in Firestore. `site/config` and `site/stats` hold settings and analytics, `visitors` holds the salted visitor hashes, `files` holds your media (each file split into 960 KB pieces), `uploading` tracks uploads in progress, `snapshots` holds 14 days of daily snapshots, `comments` and `avatars` hold comments and their pictures, `commentIps` holds the salted hashes of IPs that have commented, `commentHandles` holds which @handles are locked, `limits` holds the rate-limit counters, and `site/secret` holds a random key for signing logins.

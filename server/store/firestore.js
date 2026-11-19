@@ -64,7 +64,6 @@ export async function createStore() {
   const parse = (doc, fallback) => (doc ? JSON.parse(doc.json) : fallback);
   const emptyStats = () => ({ total: 0, unique: 0, daily: {}, referrers: {}, clicks: {}, devices: {}, browsers: {}, countries: {}, recent: [] });
   const readStats = (doc) => ({ ...emptyStats(), ...parse(doc, {}) });
-  const loginPath = (key) => `logins/${crypto.createHash('sha256').update(key).digest('hex').slice(0, 32)}`;
 
   // Firestore takes at most 500 writes per commit.
   async function commitAll(ops) {
@@ -188,11 +187,6 @@ export async function createStore() {
       });
     },
 
-    getLogin: (key) => db.get(loginPath(key)),
-    async setLogin(key, rec) {
-      await db.commit([rec ? { set: loginPath(key), data: rec } : { remove: loginPath(key) }]);
-    },
-
     // ---------- media ----------
     // Each part is written with a note in uploading/{name}, so finishing only reads that note.
     async writePart(name, index, buf) {
@@ -236,10 +230,12 @@ export async function createStore() {
       try {
         const name = decodeURIComponent(req.path.slice(1));
         if (!validName(name) || !['GET', 'HEAD'].includes(req.method)) return next();
+        // The ETag is the file name (files never change), so a revalidation needs no read.
+        const etag = `"${name}"`;
+        if (req.get('if-none-match') === etag) return res.status(304).set({ ETag: etag, 'Cache-Control': 'public, max-age=31536000, immutable' }).end();
         const meta = await db.get(`files/${name}`);
         if (!meta) return next();
         const { size } = meta;
-        const etag = `"${name}"`;
         res.set({
           'Content-Type': typeOf(name),
           'Accept-Ranges': 'bytes',
@@ -249,7 +245,6 @@ export async function createStore() {
           'CDN-Cache-Control': 'public, max-age=31536000, immutable',
           ETag: etag,
         });
-        if (req.get('if-none-match') === etag) return res.status(304).end();
 
         let start = 0;
         let end = size - 1;
@@ -287,10 +282,22 @@ export async function createStore() {
     },
 
     // Random key material for signing logins and form tokens. Created once, in a transaction
-    // so two servers can't each make their own.
-    async serverSecret() {
+    // so two servers can't each make their own. `fresh` re-reads it, to notice a rotation.
+    async serverSecret({ fresh } = {}) {
+      if (fresh && secretCache) {
+        const key = (await db.get('site/secret'))?.key;
+        if (key) secretCache = Promise.resolve(key);
+      }
       secretCache ||= randomOnce('site/secret', 'key', 32);
       return secretCache.catch((err) => { secretCache = null; throw err; });
+    },
+
+    // A new key signs everyone out ("Sign out everywhere").
+    async rotateSecret() {
+      const key = crypto.randomBytes(32).toString('hex');
+      await db.commit([{ set: 'site/secret', data: { key } }]);
+      secretCache = Promise.resolve(key);
+      return key;
     },
 
     // ---------- comments ----------

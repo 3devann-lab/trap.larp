@@ -9,7 +9,7 @@ import compression from 'compression';
 
 import { DASHBOARD_PATH, DASHBOARD_PASSWORD, MAX_UPLOAD_MB, PUBLIC_URL, EPHEMERAL_WARNING, USE_VERCEL } from './env.js';
 import { store, setupError } from './store/index.js';
-import { isAuthed, login, clearSession, requireAuth, authReady } from './auth.js';
+import { isAuthed, login, clearSession, requireAuth, authReady, signOutEverywhere } from './auth.js';
 import { recordView, recordClick, viewCount, statsSummary, ipKey } from './analytics.js';
 import { getProfile, getInvite, inviteCode, getAppIcon, effectCatalog, findEffect, checkLanyard, isSnowflake } from './discord.js';
 import { normalizeGuns, localizeMedia, downloadToLibrary } from './importer.js';
@@ -64,7 +64,32 @@ const withTimeout = (promise, ms) => Promise.race([promise, new Promise((r) => s
 const cdnCache = USE_VERCEL ? { setHeaders: (res) => res.set('CDN-Cache-Control', 'public, max-age=86400') } : {};
 app.use('/static', express.static(path.join(ROOT, 'public'), { maxAge: '1h', ...cdnCache }));
 app.use('/shared', express.static(path.join(ROOT, 'shared'), { maxAge: '1h', ...cdnCache }));
-app.use('/uploads', limit('uploads', 60e3, 300), (req, res, next) => {
+// On Vercel every upload request that misses the CDN costs Firestore reads, from a free daily
+// quota. Two cheap requests used to force misses: a made-up query string (?x=1, ?x=2...) and
+// made-up file names. A query string is now redirected away without touching the database, and
+// visitors only get files the page actually uses (read from the settings already cached for
+// every page view). The signed-in owner still gets every file in the media library.
+const usedFiles = new WeakMap();
+function filesInConfig(cfg) {
+  let set = usedFiles.get(cfg);
+  if (!set) {
+    set = new Set([...JSON.stringify(cfg).matchAll(/\/uploads\/([\w-]{12}\.[a-z0-9]{2,5})/g)].map((m) => m[1]));
+    usedFiles.set(cfg, set);
+  }
+  return set;
+}
+const uploadGate = wrap(async (req, res, next) => {
+  const q = req.originalUrl.indexOf('?');
+  if (q !== -1) return res.redirect(301, req.originalUrl.slice(0, q));
+  let name = '';
+  try { name = decodeURIComponent(req.path.slice(1)); } catch { /* not a valid name */ }
+  if (filesInConfig(await store.getConfig()).has(name)) return next();
+  await authReady();
+  if (isAuthed(req)) return next();
+  res.status(404).set('Cache-Control', 'no-store').end();
+});
+
+app.use('/uploads', limit('uploads', 60e3, 300), ...(USE_VERCEL ? [uploadGate] : []), (req, res, next) => {
   // Uploaded files can never run scripts on this origin, even if opened directly.
   res.set('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; font-src 'self'");
   res.set('Access-Control-Allow-Origin', '*');
@@ -111,7 +136,11 @@ app.get('/oembed.json', limit('lookup', 60e3, 120), wrap(async (req, res) => {
 app.post('/api/view', limit('view', 60e3, 20), wrap(async (req, res) => {
   const cfg = await store.getConfig();
   let stats = null;
-  if (!(isAuthed(req) && !cfg.views.countOwner)) {
+  // An IP this server already counted inside the cooldown can't be counted again, so skip the
+  // database transaction (two reads) instead of letting repeat calls spend the free quota.
+  const cooldown = Math.max(1, Number(cfg.views.cooldown) || 30) * 6e4;
+  const owner = isAuthed(req) && !cfg.views.countOwner;
+  if (!owner && allow('view-seen', ipKey(req.ip) || 'unknown', cooldown, 1).ok) {
     ({ stats } = await recordView(req, { referrer: String(req.body?.referrer || '').slice(0, 500), cooldownMinutes: cfg.views.cooldown }));
   }
   res.json({ views: viewCount(cfg, stats || await store.getStats()) });
@@ -184,6 +213,9 @@ app.get(DASHBOARD_PATH, limit('page', 60e3, 120), (req, res) => {
 
 const admin = express.Router();
 admin.use(requireAuth);
+
+// Replaces the signing key, so every login cookie, on every device, stops working.
+admin.post('/sessions/revoke', wrap(signOutEverywhere));
 
 admin.get('/config', wrap(async (req, res) => res.json(await store.getConfig({ fresh: true }))));
 
@@ -332,5 +364,8 @@ app.use((req, res) => res.redirect(302, '/'));
 app.use((err, req, res, next) => {
   const status = err.status || err.statusCode || 500;
   if (status >= 500) console.error('[server]', err);
-  if (!res.headersSent) res.status(status).json({ error: status >= 500 ? store?.describeError?.(err) || 'Server error.' : err.message });
+  // Firebase setup hints (which can name the Firebase user or service account) are only shown on
+  // the dashboard, its sign-in and its API, which is where the owner looks; visitors get a plain error.
+  const forOwner = req.path === DASHBOARD_PATH || req.path.startsWith('/api/admin/') || req.path.startsWith('/api/auth/');
+  if (!res.headersSent) res.status(status).json({ error: status >= 500 ? (forOwner && store?.describeError?.(err)) || 'Server error.' : err.message });
 });

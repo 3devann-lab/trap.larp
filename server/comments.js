@@ -132,7 +132,14 @@ function tokenOk(token, ip) {
 }
 
 const ipHash = async (ip) => crypto.createHash('sha256').update(`${await store.commentSalt()}|${ip}`).digest('base64url').slice(0, 24);
-const toPublic = (c) => ({ id: c.id, at: c.at, username: c.username, name: c.name, text: c.text, avatar: c.avatar ? `/api/comments/avatar/${c.avatar}` : null });
+
+// Picture addresses carry a short signature (keyed with the comment salt, which never changes),
+// so made-up picture names are turned away without a database read.
+const avatarSig = (salt, name) => crypto.createHmac('sha256', salt).update(`avatar|${name}`).digest('base64url').slice(0, 16);
+async function publicMapper() {
+  const salt = await store.commentSalt();
+  return (c) => ({ id: c.id, at: c.at, username: c.username, name: c.name, text: c.text, avatar: c.avatar ? `/api/comments/avatar/${avatarSig(salt, c.avatar)}/${c.avatar}` : null });
+}
 
 const HANDLE_TAKEN = 'That handle has already been used. If it\'s yours, ask the owner of this page to unlock it.';
 const ALREADY_POSTED = 'You already left a comment here. You can post again only if the owner of this page unlocks your @handle.';
@@ -158,17 +165,23 @@ publicComments.get('/', wrap(async (req, res) => {
   const ok = allow('comments', ip, ...LIMITS.list);
   if (!ok.ok) return deny(res, 429, 'Slow down a little.', ok.retryIn);
   const before = Number(req.query.before) || undefined;
-  const [page, mine] = await Promise.all([listPage(before), hasCommented(await ipHash(ip))]);
+  const [page, mine, toPublic] = await Promise.all([listPage(before), hasCommented(await ipHash(ip)), publicMapper()]);
   res.json({ comments: page.comments.map(toPublic), more: page.more, canPost: !mine, token: tokenFor(ip) });
 }));
 
-publicComments.get('/avatar/:name', wrap(async (req, res) => {
-  if (!validAvatar(req.params.name)) return res.status(404).end();
+publicComments.get('/avatar/:sig/:name', wrap(async (req, res) => {
+  // A query string would make Vercel's CDN miss its copy and read the database again.
+  const q = req.originalUrl.indexOf('?');
+  if (q !== -1) return res.redirect(301, req.originalUrl.slice(0, q));
   if (!allow('comment-pictures', ipKey(req.ip), ...LIMITS.pictures).ok) return res.status(429).end();
-  const buf = await store.getAvatar(req.params.name);
+  const { sig, name } = req.params;
+  if (!validAvatar(name)) return res.status(404).end();
+  const expected = avatarSig(await store.commentSalt(), name);
+  if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return res.status(404).end();
+  const buf = await store.getAvatar(name);
   if (!buf) return res.status(404).end();
   res.set({
-    'Content-Type': AVATAR_TYPES[req.params.name.split('.').pop()],
+    'Content-Type': AVATAR_TYPES[name.split('.').pop()],
     'Content-Security-Policy': "sandbox; default-src 'none'",
     'Cache-Control': 'public, max-age=3600',
     // Short CDN cache, so a deleted comment's picture stops being served soon after.
@@ -241,14 +254,14 @@ publicComments.post('/', wrap(async (req, res) => {
   }
   commented.set(hash, { value: true, at: Date.now() });
   forget();
-  res.status(201).json(toPublic(comment));
+  res.status(201).json((await publicMapper())(comment));
 }));
 
 // ---------- dashboard ----------
 export const adminComments = express.Router();
 
 adminComments.get('/', wrap(async (req, res) => {
-  const [page, unlocked] = await Promise.all([store.listComments({ limit: 50, before: Number(req.query.before) || undefined }), store.listUnlockedHandles()]);
+  const [page, unlocked, toPublic] = await Promise.all([store.listComments({ limit: 50, before: Number(req.query.before) || undefined }), store.listUnlockedHandles(), publicMapper()]);
   res.json({ comments: page.comments.map((c) => ({ ...toPublic(c), key: handleKey(c.username) })), more: page.more, unlocked });
 }));
 
